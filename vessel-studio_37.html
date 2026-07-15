@@ -1,0 +1,1043 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VESSEL — Studio</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  :root{
+    --bg:#0a0a0a;
+    --bg-alt:#111110;
+    --fg:#f2f2ed;
+    --muted:#7a7a76;
+    --line:#2a2a28;
+    --accent:#d4ff3d;
+    --mx:50vw;
+    --my:50vh;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html,body{background:var(--bg);color:var(--fg);font-family:'Inter',sans-serif;overflow-x:hidden;}
+  body.has-cursor, body.has-cursor *{cursor:none !important;}
+  ::selection{background:var(--accent);color:#0a0a0a;}
+  a{color:inherit;text-decoration:none;}
+  ul{list-style:none;}
+  button{font-family:inherit;background:none;border:none;color:inherit;cursor:pointer;}
+
+  .mono{font-family:'JetBrains Mono',monospace;letter-spacing:.05em;}
+  .display{font-family:'Bebas Neue',sans-serif;letter-spacing:.01em;line-height:.9;}
+
+  /* ================= LAYER STACK (back to front) =================
+     0  background grid
+     1  impact color splats  <-- must sit BEHIND the canvas
+     2  webgl canvas (the objects)
+     5  page content
+     150+ floating UI (previews, nav, cursor)
+  ================================================================= */
+
+  #bgGrid{position:fixed;inset:0;z-index:0;pointer-events:none;}
+  #bgGrid canvas{width:100%;height:100%;display:block;}
+  #splatLayer{position:fixed;inset:0;z-index:1;pointer-events:none;overflow:hidden;}
+  #glWrap{position:fixed;inset:0;z-index:2;pointer-events:none;}
+  #glWrap canvas{width:100%;height:100%;display:block;}
+
+  .splat{
+    position:absolute;width:10px;height:10px;border-radius:50%;
+    transform:translate(-50%,-50%) scale(0);pointer-events:none;
+    filter:blur(2px);
+  }
+
+  #cursorDot,#cursorRing{position:fixed;top:0;left:0;z-index:400;pointer-events:none;border-radius:50%;transform:translate(-50%,-50%);}
+  #cursorDot{width:6px;height:6px;background:var(--accent);}
+  #cursorRing{
+    width:38px;height:38px;border:1px solid rgba(242,242,237,.5);
+    display:flex;align-items:center;justify-content:center;
+    transition:width .25s ease,height .25s ease,border-color .25s ease,background .25s ease;
+  }
+  #cursorRing span{font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:.1em;opacity:0;transition:opacity .2s ease;color:#0a0a0a;white-space:nowrap;}
+  #cursorRing.active{width:72px;height:72px;background:var(--accent);border-color:var(--accent);}
+  #cursorRing.active span{opacity:1;}
+  @media (pointer:coarse){#cursorDot,#cursorRing{display:none;}}
+
+  #workPreview{
+    position:fixed;top:0;left:0;z-index:150;pointer-events:none;
+    width:220px;height:150px;border-radius:6px;overflow:hidden;
+    transform:translate(-50%,-50%) scale(.7);opacity:0;
+    display:flex;align-items:flex-end;padding:14px;
+    transition:opacity .3s ease;
+  }
+  #workPreview span{font-family:'JetBrains Mono',monospace;font-size:11px;color:#0a0a0a;background:#f2f2ed;padding:4px 8px;border-radius:3px;}
+
+  nav{
+    position:fixed;top:0;left:0;width:100%;z-index:200;
+    display:flex;align-items:center;justify-content:space-between;
+    padding:22px 28px;mix-blend-mode:difference;
+  }
+  .logo{font-family:'Bebas Neue',sans-serif;font-size:22px;letter-spacing:.08em;}
+  .nav-links{display:none;gap:28px;font-size:12px;}
+  @media (min-width:800px){.nav-links{display:flex;}}
+  .nav-links a{opacity:.7;transition:opacity .25s ease;position:relative;}
+  .nav-links a:hover{opacity:1;}
+  .nav-cta{font-size:11px;border:1px solid var(--fg);padding:8px 14px;border-radius:100px;display:inline-block;}
+
+  #progress{position:fixed;top:0;left:0;height:2px;background:var(--accent);width:0%;z-index:300;}
+
+  #hero{position:relative;height:100svh;width:100%;overflow:hidden;z-index:5;}
+  .hero-copy{position:absolute;left:28px;bottom:120px;z-index:5;max-width:820px;pointer-events:none;}
+  .hero-eyebrow{font-size:12px;color:var(--accent);margin-bottom:14px;display:block;}
+  .hero-title{font-size:clamp(48px,9vw,120px);}
+  .hero-hint2{position:absolute;right:28px;bottom:120px;z-index:5;font-size:11px;color:var(--muted);max-width:180px;text-align:right;pointer-events:none;}
+  .scroll-hint{
+    position:fixed;left:50%;bottom:34px;transform:translateX(-50%);
+    font-size:11px;z-index:5;opacity:1;transition:opacity .4s ease;
+    display:flex;flex-direction:column;align-items:center;gap:8px;color:#ffffffcc;
+  }
+  .scroll-hint.hide{opacity:0;}
+  .scroll-hint .bar{width:1px;height:34px;background:linear-gradient(var(--accent),transparent);animation:drop 1.6s ease infinite;}
+  @keyframes drop{0%{opacity:0;transform:translateY(-8px);}50%{opacity:1;}100%{opacity:0;transform:translateY(8px);}}
+  .news-corner{position:absolute;left:28px;bottom:34px;z-index:5;font-size:11px;color:var(--muted);}
+  .news-corner a{color:var(--fg);}
+
+  section{position:relative;width:100%;padding:160px 28px;z-index:5;}
+  .label{font-size:11px;color:var(--muted);margin-bottom:40px;display:flex;align-items:center;gap:10px;}
+  .label::before{content:'';width:26px;height:1px;background:var(--line);}
+
+  #work{padding-top:140px;}
+  .work-item{
+    display:grid;grid-template-columns:110px 1fr;gap:24px;
+    padding:34px 0;border-top:1px solid var(--line);
+    align-items:center;transition:background .3s ease;position:relative;
+  }
+  .work-item:last-child{border-bottom:1px solid var(--line);}
+  .work-item:hover{background:rgba(17,17,16,.7);}
+  .work-date{font-size:12px;color:var(--muted);}
+  .work-main{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:16px;}
+  .work-title{font-size:clamp(26px,4vw,46px);transition:color .25s ease;display:inline-block;}
+  .work-item:hover .work-title{color:var(--accent);}
+  .work-tags{display:flex;gap:8px;flex-wrap:wrap;}
+  .work-tags span{font-size:10px;border:1px solid var(--line);padding:5px 10px;border-radius:100px;color:var(--muted);}
+
+  #mission,#vision{min-height:80svh;display:flex;align-items:center;justify-content:center;text-align:center;}
+  .big-line{font-size:clamp(30px,5.4vw,68px);max-width:1000px;line-height:1.08;}
+  .big-line em{color:var(--accent);font-style:normal;}
+  #vision{position:relative;overflow:hidden;}
+  /* Drop the generated loop's src on #visionVideo (mp4/webm) to light this up — everything
+     else (sizing, fade, layering behind the glass panel) is already wired. Poster/background
+     color shows until a src is set so nothing looks broken in the meantime. */
+  #visionVideo{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.55;
+    -webkit-mask-image:radial-gradient(ellipse at center, #000 55%, transparent 85%);
+    mask-image:radial-gradient(ellipse at center, #000 55%, transparent 85%);}
+  .glass-panel{
+    position:relative;max-width:900px;padding:56px 64px;border-radius:28px;
+    border:1px solid rgba(255,255,255,.16);
+    background:linear-gradient(135deg, rgba(255,255,255,.09), rgba(255,255,255,.02) 65%);
+    backdrop-filter:blur(18px) saturate(140%) url(#liquidGlass);
+    -webkit-backdrop-filter:blur(18px) saturate(140%);
+    box-shadow:0 20px 60px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.16);
+  }
+  @media not screen and (min-width:640px){.glass-panel{padding:36px 28px;border-radius:20px;}}
+
+  .service-grid{display:grid;gap:24px;}
+  @media(min-width:800px){.service-grid{grid-template-columns:1fr 1fr;}}
+  .service-card{
+    background:rgba(10,10,10,.85);padding:60px 40px;border:1px solid var(--line);border-radius:4px;
+    transform-style:flat;backface-visibility:hidden;will-change:transform;overflow:hidden;
+    transition:background-color .35s ease;
+  }
+  .service-card:hover{background:transparent;}
+  .service-num{font-size:12px;color:var(--accent);margin-bottom:24px;}
+  .service-title{font-size:clamp(22px,2.6vw,34px);margin-bottom:18px;word-break:break-word;overflow-wrap:break-word;}
+  .service-desc{font-size:14px;color:var(--muted);line-height:1.7;max-width:420px;}
+
+  footer{padding:100px 28px 40px;border-top:1px solid var(--line);background:rgba(10,10,10,.75);}
+  .footer-top{display:flex;flex-wrap:wrap;justify-content:space-between;gap:40px;margin-bottom:80px;}
+  .footer-title{font-size:clamp(32px,6vw,64px);max-width:600px;}
+  .footer-cols{display:flex;gap:60px;flex-wrap:wrap;}
+  .footer-col h4{font-size:11px;color:var(--muted);margin-bottom:14px;}
+  .footer-col a{display:inline-block;font-size:14px;margin-bottom:10px;opacity:.85;will-change:transform;}
+  .footer-col a:hover{color:var(--accent);}
+  .footer-bottom{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);flex-wrap:wrap;gap:10px;}
+
+  [data-reveal]{opacity:0;transform:translateY(24px);}
+  [data-magnetic]{display:inline-block;}
+</style>
+</head>
+<body>
+
+<!-- SVG filter defs -->
+<svg width="0" height="0" style="position:absolute">
+  <!-- gentle, non-cursor-driven refraction for the liquid glass panel -->
+  <filter id="liquidGlass" x="-20%" y="-20%" width="140%" height="140%">
+    <feTurbulence type="fractalNoise" baseFrequency="0.009 0.014" numOctaves="2" seed="9" result="n"/>
+    <feDisplacementMap in="SourceGraphic" in2="n" scale="8" xChannelSelector="R" yChannelSelector="G"/>
+  </filter>
+
+</svg>
+
+<div id="bgGrid"><canvas id="bgGridCanvas"></canvas></div>
+
+<div id="splatLayer"></div>
+<div id="glWrap"><canvas id="gl"></canvas></div>
+<div id="progress"></div>
+<div id="cursorDot"></div>
+<div id="cursorRing"><span id="cursorLabel"></span></div>
+<div id="workPreview"><span id="workPreviewLabel"></span></div>
+
+<nav>
+  <div class="logo">VESSEL</div>
+  <ul class="nav-links mono">
+    <li><a href="#work" data-cursor="view">Work</a></li>
+    <li><a href="#mission" data-cursor="view">Studio</a></li>
+    <li><a href="#services" data-cursor="view">Approach</a></li>
+  </ul>
+  <a href="#contact" class="nav-cta mono" data-magnetic data-cursor="go">Contact</a>
+</nav>
+
+<section id="hero">
+  <div class="hero-copy">
+    <span class="hero-eyebrow mono">CREATIVE STUDIO — REALTIME WORLDS</span>
+    <h1 class="hero-title display">We build worlds<br>people want to<br>live inside.</h1>
+  </div>
+  <div class="hero-hint2 mono">DRAG THE SHAPES<br>THROW THEM AT THE WALLS</div>
+  <div class="news-corner mono">
+    LATEST — <a href="#work" data-cursor="view">Persistent world platform ships to 40k concurrent users →</a>
+  </div>
+  <div class="scroll-hint" id="scrollHint">
+    <span class="mono">SCROLL</span>
+    <div class="bar"></div>
+  </div>
+</section>
+
+<section id="work">
+  <div class="label mono">SELECTED WORK</div>
+
+  <div class="work-item" data-reveal data-cursor="view" data-preview-color="#d4ff3d" data-preview-label="Northlight">
+    <div class="work-date mono">2026<br>05.02</div>
+    <div class="work-main">
+      <div class="work-title display">Northlight Concert Grounds</div>
+      <div class="work-tags mono"><span>live-event</span><span>realtime-engine</span><span>metaverse</span></div>
+    </div>
+  </div>
+
+  <div class="work-item" data-reveal data-cursor="view" data-preview-color="#7cf2c4" data-preview-label="Fathom">
+    <div class="work-date mono">2026<br>01.17</div>
+    <div class="work-main">
+      <div class="work-title display">Fathom — Persistent World</div>
+      <div class="work-tags mono"><span>platform</span><span>mobile</span><span>multi-user</span></div>
+    </div>
+  </div>
+
+  <div class="work-item" data-reveal data-cursor="view" data-preview-color="#ff9d6c" data-preview-label="Aurelia">
+    <div class="work-date mono">2025<br>09.11</div>
+    <div class="work-main">
+      <div class="work-title display">Aurelia Fashion Runway</div>
+      <div class="work-tags mono"><span>fashion</span><span>cloud-rendering</span><span>virtual-production</span></div>
+    </div>
+  </div>
+
+  <div class="work-item" data-reveal data-cursor="view" data-preview-color="#9d8cff" data-preview-label="Driftwave">
+    <div class="work-date mono">2025<br>03.28</div>
+    <div class="work-main">
+      <div class="work-title display">Driftwave Interactive Set</div>
+      <div class="work-tags mono"><span>music</span><span>in-game-concert</span><span>ip-collab</span></div>
+    </div>
+  </div>
+</section>
+
+<section id="mission">
+  <p class="big-line display" data-reveal>We don't decorate screens.<br>We architect <em>places</em>.</p>
+</section>
+
+<section id="vision">
+  <!-- swap the empty src for the generated object -> deconstruction loop (mp4/webm ideally, gif works too) -->
+  <video id="visionVideo" autoplay muted loop playsinline></video>
+  <div class="glass-panel" data-reveal>
+    <p class="big-line display">Immersive worlds, built to be<br><em>felt</em> — not just seen.</p>
+  </div>
+</section>
+
+<section id="services">
+  <div class="label mono">HOW WE WORK</div>
+  <div class="service-grid">
+    <div class="service-card" data-tilt data-reveal>
+      <div class="service-num mono">01</div>
+      <div class="service-title display">Realtime Engine Experiences</div>
+      <p class="service-desc">We design and build inside game engines — turning brand worlds, IP, and artist identities into playable, scalable spaces that reach audiences wherever they already are.</p>
+    </div>
+    <div class="service-card" data-tilt data-reveal>
+      <div class="service-num mono">02</div>
+      <div class="service-title display">Persistent World Platforms</div>
+      <p class="service-desc">From cloud rendering to native mobile, we ship multi-user spaces with avatars, live events, and commerce baked in — built once, deployed everywhere.</p>
+    </div>
+  </div>
+</section>
+
+<footer id="contact">
+  <div class="footer-top">
+    <div class="footer-title display">Let's build<br>something worth<br>stepping into.</div>
+  </div>
+  <div class="footer-cols">
+    <div class="footer-col">
+      <h4 class="mono">STUDIO</h4>
+      <a href="#work" data-magnetic data-cursor="view">Work</a><br>
+      <a href="#mission" data-magnetic data-cursor="view">About</a><br>
+      <a href="#services" data-magnetic data-cursor="view">Approach</a>
+    </div>
+    <div class="footer-col">
+      <h4 class="mono">CONNECT</h4>
+      <a href="#" data-magnetic data-cursor="go">Contact</a><br>
+      <a href="#" data-magnetic data-cursor="go">Recruit</a><br>
+      <a href="#" data-magnetic data-cursor="go">X / Twitter</a>
+    </div>
+  </div>
+  <div class="footer-bottom mono">
+    <span>© 2026 VESSEL STUDIO</span>
+    <span>Template inspired by immersive-studio site patterns</span>
+  </div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
+<script>
+gsap.registerPlugin(ScrollTrigger);
+const isTouch = window.matchMedia('(pointer:coarse)').matches;
+
+/* ================= WEBGL background grid — real bent plane, alche-style =================
+   This now follows alche.studio's actual hero technique directly rather than approximating it:
+   a fixed, normalized PlaneGeometry(1,1,...) (local x/y in [-0.5, 0.5]) bent in the vertex
+   shader with theta = localX * PI * strength, vertex placed via sin/cos — their exact
+   `gridVert` approach. All real-world sizing lives in a single `uScale` uniform multiplied in
+   at the end (their `uScale.x` / `uScale.y` pattern), so the geometry itself never needs to be
+   rebuilt on resize — only the uniforms and camera do. That's what makes "flat/equal at center,
+   curving toward the edges" fall out for free — a cylinder has zero curvature at its own seam
+   and only curves increasingly away from it.
+   - Center stays perfectly flat/square: bend angle is 0 exactly at local x=0.
+   - Sides curl into real depth via sin/cos placement + perspective — the plane's own z pushes
+     *toward* the viewer near the edges, wrapping like the inside of a cylinder (you're
+     surrounded by it) rather than the outside of one (which would recede/bulge away like a dome
+     or a ball). Bend strength is pushed fairly high now for a visibly stronger effect.
+   - Paper fold (this part is this project's own addition, not alche's — their plane doesn't
+     fold): the top half tilts up and the bottom half tilts down near those same edges, via a
+     continuous ramp on the already-normalized local y (no sign()-step, so no seam tear).
+   - Grid lines are drawn procedurally in the fragment shader from the plane's *flat* local UV
+     (fract-based, tiling), so there's no discrete per-line coverage limit to run out of — this
+     is what makes it correct on ultrawide for free. The plane geometry itself is sized generously
+     beyond the visible frustum (with extra margin) so panning/tilting never exposes a bare edge.
+   - Mouse parallax: the whole mesh tilts toward the cursor, lerped slowly — kept deliberately
+     subtle so the background reads as a gentle drift rather than something chasing the cursor.
+   - The pattern itself doesn't move when you scroll — same as alche.studio, whose hero background
+     stays put while the page scrolls over it. The only scroll-linked thing is a fade: a
+     ScrollTrigger on `#vision` fades the whole layer out right as that section arrives, since
+     "Immersive worlds..." there is where this hands off to the glass panel (which already has a
+     video/gif slot planned — see notes.md). */
+(function(){
+  const hostCanvas = document.getElementById('bgGridCanvas');
+  if(!hostCanvas || !window.THREE) return;
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const coarsePointer = window.matchMedia('(pointer:coarse)').matches;
+
+  const renderer = new THREE.WebGLRenderer({canvas: hostCanvas, antialias:true, alpha:true});
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
+  camera.position.z = 10;
+
+  const BEND_STRENGTH = 0.82; // fraction of a full alche-style half-turn (theta = localX * PI); stronger = more circular
+  const FOLD_UNITS = 2.2;     // max vertical paper-fold push, world units, reached at the plane's edges — raised for a stronger effect
+  const MARGIN = 1.6;         // geometry sized this many times past the visible frustum — covers ultrawide + the mouse tilt + "a bit more beyond"
+  const NOISE_DISP_FREQ = 3.2;  // shared between vertex displacement and fragment coloring, see noiseGLSL below
+  const NOISE_DISP_AMOUNT = FOLD_UNITS * 0.035; // small crinkle relative to the deliberate fold, texture rather than shape
+
+  // Shared hash/value-noise/FBM, textually pasted into both shaders below via ${noiseGLSL} so
+  // the vertex shader's paper-crinkle displacement and the fragment shader's color grading are
+  // sampling the literal same noise function at the literal same frequency, not two separately
+  // tuned approximations of each other. fbm4/fbm3 are two fixed-octave-count variants (GLSL ES
+  // 1.0 loop bounds need to be compile-time constants, so this is simpler and more portable than
+  // one function with a variable octave count) — fbm4 for the finer/displacement-linked noise,
+  // fbm3 for the cheaper large-scale and curvature-slope taps that get called several times.
+  const noiseGLSL = `
+    float hash21(vec2 p){
+      p = fract(p * vec2(123.34, 456.21));
+      p += dot(p, p + 45.32);
+      return fract(p.x * p.y);
+    }
+    float vnoise(vec2 p){
+      vec2 i = floor(p);
+      vec2 f = fract(p);
+      float a = hash21(i);
+      float b = hash21(i + vec2(1.0, 0.0));
+      float c = hash21(i + vec2(0.0, 1.0));
+      float d = hash21(i + vec2(1.0, 1.0));
+      vec2 u = f * f * (3.0 - 2.0 * f);
+      return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+    }
+    float fbm4(vec2 p){
+      float sum = 0.0, amp = 0.5, freq = 1.0;
+      for(int i = 0; i < 4; i++){
+        sum += amp * vnoise(p * freq);
+        freq *= 2.0;
+        amp *= 0.5;
+      }
+      return sum / 0.9375;
+    }
+    float fbm3(vec2 p){
+      float sum = 0.0, amp = 0.5, freq = 1.0;
+      for(int i = 0; i < 3; i++){
+        sum += amp * vnoise(p * freq);
+        freq *= 2.0;
+        amp *= 0.5;
+      }
+      return sum / 0.875;
+    }
+  `;
+
+  // Vertex shader now follows alche's actual approach directly: geometry stays a fixed
+  // normalized PlaneGeometry(1,1,...) with local x/y in [-0.5, 0.5], and all real-world sizing
+  // is pushed into a uScale uniform multiplied in at the end — exactly their `uScale.x` /
+  // `uScale.y` pattern — rather than baking window-dependent half-widths into the geometry
+  // itself and rebuilding it on every resize. Simpler, and it's genuinely their technique now
+  // rather than an approximation of it: theta = localX * PI * strength, vertex placed with
+  // sin/cos, same as their gridVert. The fold term (their version doesn't have one — that part
+  // is still this project's own addition) rides on top using the same normalized local.y, so it
+  // needs no separate half-height uniform either.
+  const vertexShader = `
+    ${noiseGLSL}
+    uniform vec2 uScale;
+    uniform float uBend;
+    uniform float uFold;
+    varying vec2 vLocal;
+    varying float vCurvature;
+    void main(){
+      vec2 lp = position.xy; // already in [-0.5, 0.5] on both axes
+      vLocal = lp * uScale;
+      float theta = lp.x * 3.14159265 * uBend;
+      vec3 bent;
+      bent.x = sin(theta) * 0.5 * uScale.x;
+      bent.z = (1.0 - cos(theta)) * 0.5 * uScale.x; // 0 at the seam, edges curl TOWARD the viewer — the inside of the cylinder, not the outside
+      float edge = abs(sin(theta));
+      // fold direction+magnitude come from the same continuous, already-normalized ramp
+      // (lp.y is never outside [-0.5, 0.5]) — no sign()-step, no seam tear.
+      bent.y = lp.y * uScale.y + (lp.y * 2.0) * edge * edge * uFold;
+      // subtle procedural crinkle on top of the deliberate analytic fold — texture, not shape.
+      // Recentered around 0 (fbm4 returns roughly 0..1) so it pushes the surface both toward
+      // and away from the viewer rather than only ever puffing outward. The fragment shader
+      // samples this exact same fbm4 at this exact same frequency for its color grading, so
+      // the "paper texture" and the "color" are genuinely the same underlying noise field,
+      // not two independently-tuned look-alikes.
+      bent.z += (fbm4(lp * ${NOISE_DISP_FREQ.toFixed(2)}) - 0.5) * ${NOISE_DISP_AMOUNT.toFixed(4)};
+      // real geometric curvature (not a noise proxy): how sharply this point is bending,
+      // same edge*edge weighting the fold itself uses, so "curvature" means the same thing
+      // here as it does structurally — high right where the paper is actually creasing hardest
+      vCurvature = edge * edge;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(bent, 1.0);
+    }
+  `;
+
+  const fragmentShader = `
+    precision highp float;
+    ${noiseGLSL}
+    varying vec2 vLocal;
+    varying float vCurvature;
+    uniform vec2 uScale;
+    uniform float uFade;
+    uniform float uTime;
+    uniform float uSpacingPixel;
+    uniform float uSpacingCell;
+    uniform float uSpacingTile;
+    uniform float uLinePixel;
+    uniform float uLineCell;
+    uniform float uLineTile;
+    uniform float uWobbleAmp;
+    uniform vec3 uColorPixel;
+    uniform vec3 uColorCell;
+    uniform vec3 uColorTile;
+
+    float gridLine(vec2 uv, float spacing, float px){
+      vec2 g = uv / spacing;
+      // Centered on integer multiples of spacing (i.e. uv = n*spacing, same origin as every
+      // other tier) rather than half-integer multiples (uv = (n+0.5)*spacing). The previous
+      // fract(g) - 0.5 version put each tier's lines a half-period off from the shared
+      // origin — and since "half a period" is a different absolute distance for each tier's
+      // own spacing, no exact multiple between tiers could ever make them land on the same
+      // line. fract(g + 0.5) - 0.5 wraps around 0 instead, so all three tiers are finally
+      // measured from the same anchor and coincide wherever their spacings are exact
+      // multiples of each other (which they are, by construction).
+      vec2 f = abs(fract(g + 0.5) - 0.5);
+      float d = min(f.x, f.y) * spacing;
+      float w = px * 0.5;
+      return 1.0 - smoothstep(w * 0.4, w, d);
+    }
+
+    void main(){
+      vec2 uv = vLocal;
+      // a gentle organic wobble on one axis only, echoing the hand-drawn feel of the original —
+      // lower time coefficient (slower) and lower spatial frequency (broader wave) than before,
+      // so the motion reads as a slow, smooth drift rather than a wiggle
+      uv.x += sin(uv.y * 0.006 + uTime * 0.022) * uWobbleAmp;
+      // no 45deg rotation anymore — straight, axis-aligned squares (a "screen" grid, not diamonds)
+
+      float pixel = gridLine(uv, uSpacingPixel, uLinePixel);
+      float cell = gridLine(uv, uSpacingCell, uLineCell);
+      float tile = gridLine(uv, uSpacingTile, uLineTile);
+
+      // ---- procedural color grading: dark charcoal base, pastel-green accents ----
+      // nuv recovers the same normalized [-0.5, 0.5] local coordinate the vertex shader calls
+      // lp (vLocal = lp * uScale), so every noise sample below is resolution/window-size
+      // independent — it won't re-scale itself when the browser is resized.
+      vec2 nuv = vLocal / uScale;
+      // NaN guard: the mesh's extreme bend/fold can leave a small fraction of triangles
+      // near-degenerate at the outer fold edges, and some rasterizers interpolate varyings
+      // to NaN across those triangles rather than a merely-extreme finite value. A grid line's
+      // antialiasing failing silently in one such corner fragment was never visible before, but
+      // this fill covers the whole surface, so a NaN here would otherwise propagate through
+      // every noise/color calculation below and silently blank out exactly the high-curvature
+      // "ridge" areas the whole effect is supposed to highlight. Falling back to the origin is
+      // a safe, inert default — it just contributes one more "flat/dark" sample.
+      if(nuv.x != nuv.x || nuv.y != nuv.y) nuv = vec2(0.0);
+      float curvature = (vCurvature == vCurvature) ? vCurvature : 0.0;
+
+      // the same FBM, same frequency, the vertex shader used for its crinkle displacement —
+      // sampled fresh per-fragment (rather than interpolated from the coarse 140x90 vertex
+      // mesh) since color needs full fragment resolution but displacement only needed to be
+      // felt at vertex density.
+      float nDisp = fbm4(nuv * ${NOISE_DISP_FREQ.toFixed(2)});
+
+      // a second, much larger-scale layer — a handful of broad patches across the whole
+      // plane, unrelated in frequency to the fine crinkle, so the color doesn't just trace
+      // the crinkle's own "height" and read as simple contour bands
+      float nLarge = fbm3(nuv * 0.55 + vec2(11.3, -7.1));
+
+      // gentle ambient variation: very low frequency, slowly drifting over time, independent
+      // of both layers above
+      float nAmbient = fbm3(nuv * 0.22 + vec2(uTime * 0.008, -uTime * 0.006));
+
+      // surface curvature: the real analytic fold curvature from the vertex shader — high
+      // exactly where the paper is actually creasing hardest (same edge*edge weighting the
+      // fold displacement itself uses) — rather than a noise-derived proxy. This is genuine
+      // geometry, not an approximation of it (already NaN-guarded and declared above, next to
+      // the nuv guard, since both come from varyings and needed the same protection). An
+      // earlier version also blended in a finite-difference "slope" of the noise field for
+      // extra curvature-like variation, but vCurvature alone is simpler, still geometrically
+      // faithful, and was easier to verify correct once the real bug (NaN varyings, not the
+      // extra noise taps) turned out to be the actual cause of the missing color.
+
+      // weighted combination, deliberately not dominated by nDisp — color should emerge from
+      // broad terrain + curvature + ambient drift, not trace the fine crinkle's height 1:1.
+      // Weights don't sum to 1 here on purpose: summing several already-normalized FBM layers
+      // as a true weighted average clusters tightly around their shared mean (verified by
+      // simulating this exact formula outside the shader — a naively-weighted average only
+      // ever reached about 0.29-0.38, nowhere near a usable smoothstep band), so this combines
+      // them with larger, unnormalized weights to get enough spread for the threshold below to
+      // actually carve out a small minority of the surface.
+      float rawMask = nLarge * 0.7 + curvature * 0.5 + nAmbient * 0.25 + nDisp * 0.15;
+
+      // Very smooth (smoothstep, not linear), and both edges tuned against the actual observed
+      // spread of rawMask above (empirically ~0.48-0.65 across the visible frame, before
+      // vCurvature's own extra contribution near the folded edges pushes it higher there) so
+      // that only roughly the top 10-15% of that range differs from pure dark at all, and only
+      // its top couple percent reaches full pastel green — this is what keeps the composition
+      // 80-90%+ dark rather than an even gradient across the whole surface.
+      float mask = smoothstep(0.585, 0.62, rawMask);
+
+      // soft edge falloff toward charcoal at the visible frame's corners. Rescaling by MARGIN
+      // maps the actual visible viewport back to roughly r in [0, 0.5] — the plane geometry
+      // extends well past that (MARGIN=1.6, for the mouse tilt + ultrawide coverage), but that
+      // overscanned part is always off-screen, so falloff is tuned against what's actually seen.
+      float r = length(nuv * ${MARGIN.toFixed(3)});
+      float edgeFalloff = 1.0 - smoothstep(0.55, 0.95, r);
+      mask *= edgeFalloff;
+
+      vec3 darkBase = vec3(0.0392, 0.0392, 0.0392);   // #0a0a0a — the page's own theme background
+      vec3 warmAccent = vec3(0.6549, 0.9098, 0.7098); // #A7E8B5 — soft pastel green
+      vec3 fillColor = mix(darkBase, warmAccent, mask);
+      float fillAlpha = mix(0.12, 0.5, mask); // dark areas stay a faint, barely-there charcoal wash; green ridges pick up real presence
+
+      // Composited as layers, not summed: tile lines are exact multiples of cell lines,
+      // which are exact multiples of pixel lines, so a tile line is *also* a cell line and
+      // a pixel line at every point along it. Summing all three colors/alphas together made
+      // those shared points blow out (double/triple-stacked), reading as overlapping lines.
+      // Standard "src-over-dst" alpha compositing instead: each tier is painted over the
+      // last using its own coverage as the blend weight, rather than a hard step/branch —
+      // a branch on "coverage > 0" still leaves a hard seam right at the edge of each
+      // tier's own antialiasing band (a thin ring where the tier below vanishes completely
+      // even though the tier above is only barely covering that pixel), which itself reads
+      // as a faint doubled edge. mix() blends continuously across that band instead. The base
+      // layer is now the procedural fill above, instead of flat transparent — lines get drawn
+      // over that fill exactly the same way they used to get drawn over nothing.
+      vec3 col = fillColor;
+      float alpha = fillAlpha;
+
+      // finest tier: per-cell hash gives each little square its own fixed brightness and its
+      // own twinkle phase, rather than every pixel-tier line reading as identically bright —
+      // an uneven, individually-lit grid instead of a uniform mechanical one.
+      vec2 pixelCellIndex = floor(uv / uSpacingPixel + 0.5);
+      float pixelHash = hash21(pixelCellIndex);
+      float pixelTwinkle = 0.75 + 0.25 * sin(uTime * 0.6 + pixelHash * 6.2831853);
+      float pixelBrightness = mix(0.35, 1.0, pixelHash) * pixelTwinkle;
+      col = mix(col, uColorPixel * pixelBrightness, pixel);
+      alpha = mix(alpha, max(alpha, 0.16) * pixelBrightness, pixel);
+
+      col = mix(col, uColorCell, cell);
+      alpha = mix(alpha, max(alpha, 0.28), cell);
+
+      col = mix(col, uColorTile, tile);
+      alpha = mix(alpha, max(alpha, 0.42), tile);
+
+      alpha *= uFade;
+      if(alpha < 0.002) discard;
+      gl_FragColor = vec4(col, alpha);
+    }
+  `;
+
+  // Three nested square tiers, screen/pixel-grid metaphor — restructured one level down from
+  // the original: the old largest ("tile") tier is gone, the old medium ("cell") tier is now
+  // the largest visible tier, the old finest ("pixel") tier is now the middle tier, and a
+  // brand-new finest tier sits below that. Variable/uniform names below (uSpacingTile/
+  // uSpacingCell/uSpacingPixel etc.) keep their original roles — "tile" is whichever tier is
+  // currently largest, etc. — rather than being renamed, so the shader above didn't need to
+  // change at all, only what these three numbers resolve to.
+  //   tile  (largest, was "cell")  — each tile is an 8x8 grid of the new cell tier (64 per
+  //           tile), same ratio the old cell-to-pixel relationship already used.
+  //   cell  (middle, was "pixel")  — each cell is a 4x4 grid of the new, brand-new pixel tier
+  //           (16 per cell).
+  //   pixel (new finest)           — 1/4 the spacing of the old finest tier; didn't exist
+  //           before this pass.
+  // Still built bottom-up as exact integer multiples of the finest tier (not each computed
+  // independently from its own fraction) for the same reason as before: that's what keeps
+  // every tier's lines landing exactly on the next tier's lines instead of drifting apart.
+  const OLD_LARGEST_FRACTION = (32/1600) * 9;             // what the old top "accent" tier used to be, at the 1600px baseline
+  // The finest tier added in the last pass (1/4 of the old finest tier's spacing) worked out
+  // to under 2 screen pixels between lines at a typical window width — below that, no amount
+  // of antialiasing (MSAA, the smoothstep band, a higher pixel ratio, none of it) can keep
+  // adjacent lines visually distinct; they just shimmer/moiré, because the lines are closer
+  // together than the display can resolve. That's a spacing problem, not a rendering-quality
+  // problem, so the fix is making every tier's base unit a bit bigger (not the plane geometry
+  // itself, which doesn't touch line density at all) rather than tuning antialiasing settings
+  // that were never going to be able to fix it. GRID_SCALE bumps all three tiers up together
+  // so the ratios and the alignment fix above are untouched, only the base size grows.
+  const GRID_SCALE = 3;
+  const FRACTION_TILE = OLD_LARGEST_FRACTION * 0.75 * GRID_SCALE;      // no longer a rendered tier itself — kept only to derive FRACTION_CELL below
+  const FRACTION_CELL = FRACTION_TILE / 4;                // this is now the new largest (tile) tier's fraction
+  const FRACTION_PIXEL = FRACTION_CELL / 8;                // this is now the new middle (cell) tier's fraction
+  const TILE_LINE_VS_CELL = 2;    // largest tier's line width is set directly as a multiple of the medium tier's actual (computed) width below, rather than its own independent ratio — much thinner than the previous 0.065 ratio produced, and stays exactly "2x medium" at any window size instead of the two drifting apart as spacing changes
+  const LINE_CELL_RATIO = 0.09;   // middle tier (was the finest/pixel tier) — same ratio as before, so it looks the same as it always did
+  const LINE_PIXEL_RATIO = 0.14;  // new finest tier — thin relative to its own (small) spacing
+  const WOBBLE_RATIO = 0.02; // relative to the largest tier's spacing — slightly less movement than before (was 0.03)
+  // Line width above is a fraction of each tier's own spacing, in *world* units — but the
+  // bent plane's edges tip away from the camera, so a fixed world-space width foreshortens
+  // toward zero on-screen as the surface angles away, and the finer tiers (already the
+  // thinnest) were vanishing there first. Clamping to a minimum in screen pixels (applied
+  // before the world-unit conversion below) keeps them from ever thinning past visible.
+  const MIN_LINE_SCREEN_PX_PIXEL = 1.2, MIN_LINE_SCREEN_PX_CELL = 1.6;
+
+  const uniforms = {
+    uScale: {value: new THREE.Vector2(1, 1)},
+    uBend: {value: BEND_STRENGTH},
+    uFold: {value: FOLD_UNITS},
+    uFade: {value: 1},
+    uTime: {value: 0},
+    uSpacingPixel: {value: 1},
+    uSpacingCell: {value: 1},
+    uSpacingTile: {value: 1},
+    uLinePixel: {value: 1},
+    uLineCell: {value: 1},
+    uLineTile: {value: 1},
+    uWobbleAmp: {value: 1},
+    uColorPixel: {value: new THREE.Color(0xf2f2ed)},
+    uColorCell: {value: new THREE.Color(0xf2f2ed)},
+    uColorTile: {value: new THREE.Color(0x4a4a4a)}
+  };
+
+  const material = new THREE.ShaderMaterial({
+    vertexShader, fragmentShader, uniforms,
+    transparent: true, side: THREE.DoubleSide, depthTest: true, depthWrite: true
+  });
+
+  // Geometry is created exactly once now — a fixed normalized 1x1 plane — since the vertex
+  // shader takes care of real-world sizing through uScale. Resize just updates uniforms/camera
+  // instead of disposing and rebuilding the mesh every time, which is most of what "simpler"
+  // meant here versus the previous per-resize rebuild.
+  const geo = new THREE.PlaneGeometry(1, 1, 140, 90);
+  const mesh = new THREE.Mesh(geo, material);
+  scene.add(mesh);
+
+  function layout(){
+    const W = window.innerWidth, H = window.innerHeight;
+    camera.aspect = W / H;
+    camera.updateProjectionMatrix();
+    const vFov = camera.fov * Math.PI / 180;
+    const visibleH = 2 * Math.tan(vFov/2) * camera.position.z;
+    const visibleW = visibleH * camera.aspect;
+    const planeW = visibleW * MARGIN, planeH = visibleH * MARGIN;
+    uniforms.uScale.value.set(planeW, planeH);
+
+    // world-units-per-screen-pixel at the plane's depth; visibleW/W and visibleH/H are always
+    // equal here (camera.aspect is kept locked to W/H above), so applying this one factor to
+    // both axes keeps every cell square on screen regardless of the window's aspect ratio —
+    // that's the "fix its height" part, derived rather than a separate/independent vertical
+    // scale that could drift out of sync with width.
+    const unitsPerPx = visibleW / W;
+    // Built bottom-up from the new finest tier, same reasoning as before: cell is an exact
+    // 4x multiple of pixel, tile is an exact 8x multiple of cell, so every coarser tier's
+    // lines land exactly on the next finer tier's lines instead of drifting apart. (This also
+    // means spacingCellPx below works out to exactly what used to be the old finest/pixel
+    // spacing, and spacingTilePx works out to exactly the old medium/cell spacing — the math
+    // just confirms the tiers now occupy the roles described above.)
+    const spacingPixelPx = (W * FRACTION_PIXEL) / 4;
+    const spacingCellPx = spacingPixelPx * 4;
+    const spacingTilePx = spacingCellPx * 8;
+    uniforms.uSpacingPixel.value = spacingPixelPx * unitsPerPx;
+    uniforms.uSpacingCell.value = uniforms.uSpacingPixel.value * 4;
+    uniforms.uSpacingTile.value = uniforms.uSpacingCell.value * 8;
+    uniforms.uLinePixel.value = Math.max(spacingPixelPx * LINE_PIXEL_RATIO, MIN_LINE_SCREEN_PX_PIXEL) * unitsPerPx;
+    uniforms.uLineCell.value = Math.max(spacingCellPx * LINE_CELL_RATIO, MIN_LINE_SCREEN_PX_CELL) * unitsPerPx;
+    uniforms.uLineTile.value = uniforms.uLineCell.value * TILE_LINE_VS_CELL;
+    uniforms.uWobbleAmp.value = spacingTilePx * WOBBLE_RATIO * unitsPerPx;
+
+    renderer.setSize(W, H);
+  }
+  layout();
+  let resizeT;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeT);
+    resizeT = setTimeout(layout, 150);
+  });
+
+  // mouse parallax — the mesh tilts toward the cursor, lerped for smoothness; kept deliberately
+  // subtle (low rotation coefficients + slow lerp) so it reads as a gentle drift rather than
+  // something actively chasing the cursor. Skipped entirely on touch/reduced-motion.
+  let mouseX = 0, mouseY = 0, curX = 0, curY = 0;
+  if(!coarsePointer && !reducedMotion){
+    window.addEventListener('mousemove', e => {
+      mouseX = (e.clientX / window.innerWidth) * 2 - 1;
+      mouseY = (e.clientY / window.innerHeight) * 2 - 1;
+    });
+  }
+
+  // fade only — the pattern itself stays put while you scroll (like alche's background does;
+  // it's position:fixed and doesn't track scroll position at all). The only scroll-linked
+  // thing left is fading the whole layer out right as #vision arrives, handing off to
+  // "Immersive worlds..." (see notes.md for the planned video/gif there).
+  let scrollFade = 1;
+  if(window.gsap && window.ScrollTrigger){
+    ScrollTrigger.create({
+      trigger: '#vision', start: 'top bottom', end: 'top center',
+      scrub: true,
+      onUpdate: self => { scrollFade = 1 - self.progress; }
+    });
+  }
+
+  const clock = new THREE.Clock();
+  (function animate(){
+    requestAnimationFrame(animate);
+    if(!reducedMotion){
+      curX += (mouseX - curX) * 0.035;
+      curY += (mouseY - curY) * 0.035;
+      mesh.rotation.y = curX * 0.05;
+      mesh.rotation.x = -curY * 0.025;
+    }
+    uniforms.uFade.value = scrollFade;
+    uniforms.uTime.value = clock.getElapsedTime();
+    renderer.render(scene, camera);
+  })();
+})();
+
+/* ================= WEBGL — page-wide, physics-driven field ================= */
+const canvas = document.getElementById('gl');
+const renderer = new THREE.WebGLRenderer({canvas, antialias:true, alpha:true});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(55, window.innerWidth/window.innerHeight, 0.1, 100);
+camera.position.z = 9;
+
+const group = new THREE.Group();
+const geo = new THREE.IcosahedronGeometry(1, 0);
+const PALETTE = [0xd4ff3d, 0x7cf2c4, 0xff9d6c, 0x9d8cff];
+
+// unselected state: dim, double-sided so the far/inner faces read through — the "other side"
+const dimMaterial = new THREE.MeshBasicMaterial({color:0xf2f2ed, wireframe:true, transparent:true, opacity:.14, side:THREE.DoubleSide});
+// selected/grabbed state: fully lit outline in the object's own color
+const brightMaterials = {};
+PALETTE.forEach(c => brightMaterials[c] = new THREE.MeshBasicMaterial({color:c, wireframe:true, transparent:true, opacity:1, side:THREE.DoubleSide}));
+
+/* --- play area walls: objects bounce inside this box --- */
+const BOUNDS = {x:9, y:23, z:6.5};
+
+const nodes = [];
+const COUNT = 58;
+for(let i=0;i<COUNT;i++){
+  const mesh = new THREE.Mesh(geo, dimMaterial);
+  const scale = THREE.MathUtils.randFloat(0.2, 1.05);
+  mesh.scale.setScalar(scale);
+  mesh.position.set(
+    THREE.MathUtils.randFloatSpread(BOUNDS.x*2*0.9),
+    THREE.MathUtils.randFloatSpread(BOUNDS.y*2*0.9),
+    THREE.MathUtils.randFloatSpread(BOUNDS.z*2*0.9)
+  );
+  mesh.userData.spin = THREE.MathUtils.randFloat(0.05, 0.3) * (Math.random() > .5 ? 1 : -1);
+  const colorNum = PALETTE[i % PALETTE.length];
+  mesh.userData.colorNum = colorNum;
+  mesh.userData.color = '#' + colorNum.toString(16).padStart(6,'0');
+  mesh.userData.dragging = false;
+  mesh.userData.radius = scale; // approx collision radius
+  mesh.velocity = new THREE.Vector3(
+    THREE.MathUtils.randFloatSpread(0.6),
+    THREE.MathUtils.randFloatSpread(0.6),
+    THREE.MathUtils.randFloatSpread(0.6)
+  );
+  group.add(mesh);
+  nodes.push(mesh);
+}
+scene.add(group);
+
+let mouseX = 0, mouseY = 0, targetMouseX = 0, targetMouseY = 0;
+window.addEventListener('mousemove', (e)=>{
+  targetMouseX = (e.clientX / window.innerWidth - 0.5);
+  targetMouseY = (e.clientY / window.innerHeight - 0.5);
+});
+
+function getScrollProgress(){
+  const h = document.documentElement.scrollHeight - window.innerHeight;
+  return h > 0 ? window.scrollY / h : 0;
+}
+
+/* ================= impact splats — spawned BEHIND the canvas layer ================= */
+const splatLayer = document.getElementById('splatLayer');
+function spawnSplat(worldPos, colorHex){
+  const p = worldPos.clone().project(camera);
+  const x = (p.x * 0.5 + 0.5) * window.innerWidth;
+  const y = (-p.y * 0.5 + 0.5) * window.innerHeight;
+  if(x < -50 || x > window.innerWidth+50 || y < -50 || y > window.innerHeight+50) return;
+
+  const el = document.createElement('div');
+  el.className = 'splat';
+  el.style.left = x+'px';
+  el.style.top = y+'px';
+  el.style.background = `radial-gradient(circle, ${colorHex}aa, ${colorHex}22 55%, transparent 75%)`;
+  splatLayer.appendChild(el);
+
+  gsap.timeline({onComplete:()=> el.remove()}) // always cleaned up — never left "stuck" colored
+    .to(el, {width:260, height:260, duration:.5, ease:'power2.out'}, 0)
+    .to(el, {opacity:0, duration:.6, ease:'power1.in'}, .15)
+    .set(el, {scale:1}, 0);
+  gsap.to(el, {'--s':1});
+  el.style.transform = 'translate(-50%,-50%) scale(1)';
+}
+
+/* ================= drag / throw ================= */
+const raycaster = new THREE.Raycaster();
+const ndc = new THREE.Vector2();
+let dragNode = null, dragDistance = 0, lastDragPos = new THREE.Vector3(), lastDragT = 0;
+
+function toNDC(e){ ndc.x = (e.clientX/window.innerWidth)*2-1; ndc.y = -(e.clientY/window.innerHeight)*2+1; }
+
+window.addEventListener('mousedown', (e)=>{
+  toNDC(e);
+  raycaster.setFromCamera(ndc, camera);
+  const hit = raycaster.intersectObjects(nodes)[0];
+  if(hit){
+    dragNode = hit.object;
+    dragNode.userData.dragging = true;
+    dragNode.material = brightMaterials[dragNode.userData.colorNum]; // selected — fully colored
+    dragDistance = hit.distance;
+    lastDragPos.copy(dragNode.position);
+    lastDragT = performance.now();
+  }
+});
+window.addEventListener('mousemove', (e)=>{
+  if(!dragNode) return;
+  toNDC(e);
+  raycaster.setFromCamera(ndc, camera);
+  const newPos = raycaster.ray.origin.clone().addScaledVector(raycaster.ray.direction, dragDistance);
+  const now = performance.now();
+  const dt = Math.max((now - lastDragT)/1000, 0.001);
+  dragNode.velocity.copy(newPos).sub(lastDragPos).divideScalar(dt).multiplyScalar(0.6);
+  dragNode.position.copy(newPos);
+  lastDragPos.copy(newPos);
+  lastDragT = now;
+});
+window.addEventListener('mouseup', ()=>{
+  if(dragNode){
+    dragNode.userData.dragging = false;
+    dragNode.material = dimMaterial; // unselected — discolored, back faces show through
+  }
+  dragNode = null;
+});
+
+/* ================= physics loop: gravity-free bounce inside BOUNDS ================= */
+const RESTITUTION = 0.72;
+// the play area's side walls bulge outward near the vertical center and taper
+// toward the top/bottom — a barrel shape matching the background's curve,
+// rather than a flat box
+function curvedLimit(baseLimit, y){
+  const t = Math.min(Math.abs(y) / BOUNDS.y, 1);
+  return baseLimit * (1 + 0.3 * Math.cos(t * Math.PI/2));
+}
+
+function stepPhysics(dt){
+  const hits = [];
+  for(const m of nodes){
+    if(m.userData.dragging) continue;
+    m.position.addScaledVector(m.velocity, dt);
+    m.velocity.multiplyScalar(0.997); // gentle damping so throws settle
+    m.rotation.x += 0.01 * m.userData.spin;
+    m.rotation.y += 0.014 * m.userData.spin;
+
+    // bounce at the outer border — curved on x/z, flat on y
+    ['x','y','z'].forEach(axis=>{
+      const limit = axis === 'y' ? BOUNDS.y : curvedLimit(BOUNDS[axis], m.position.y);
+      if(m.position[axis] > limit){ m.position[axis] = limit; m.velocity[axis] *= -RESTITUTION; hits.push(m); }
+      else if(m.position[axis] < -limit){ m.position[axis] = -limit; m.velocity[axis] *= -RESTITUTION; hits.push(m); }
+    });
+
+    // tiny ambient life so the field never fully goes still
+    if(Math.random() < 0.0025){
+      m.velocity.add(new THREE.Vector3(THREE.MathUtils.randFloatSpread(0.3), THREE.MathUtils.randFloatSpread(0.3), THREE.MathUtils.randFloatSpread(0.3)));
+    }
+  }
+
+  if(hits.length){
+    // prioritise closer objects — only the nearest few actually flash the wall
+    const unique = [...new Set(hits)].sort((a,b)=> camera.position.distanceTo(a.position) - camera.position.distanceTo(b.position));
+    unique.slice(0,3).forEach(m => spawnSplat(m.position, m.userData.color));
+  }
+}
+
+const clock = new THREE.Clock();
+function animate(){
+  const dt = Math.min(clock.getDelta(), 0.05);
+  mouseX += (targetMouseX - mouseX) * 0.05;
+  mouseY += (targetMouseY - mouseY) * 0.05;
+
+  const progress = getScrollProgress();
+  camera.position.y = -progress * (BOUNDS.y*1.9) + BOUNDS.y*0.4;
+
+  stepPhysics(dt);
+
+  camera.position.x += (mouseX*1.4 - camera.position.x) * 0.04;
+  camera.lookAt(0, camera.position.y, 0);
+
+  renderer.render(scene, camera);
+  requestAnimationFrame(animate);
+}
+animate();
+
+window.addEventListener('resize', ()=>{
+  camera.aspect = window.innerWidth/window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+/* ================= Scroll progress bar ================= */
+gsap.to('#progress', {
+  width:'100%', ease:'none',
+  scrollTrigger:{ trigger: document.body, start:'top top', end:'bottom bottom', scrub:true }
+});
+
+/* ================= Hide scroll hint after first scroll ================= */
+ScrollTrigger.create({
+  trigger:'#hero', start:'top top', end:'bottom top',
+  onLeave: ()=> document.getElementById('scrollHint').classList.add('hide'),
+  onEnterBack: ()=> document.getElementById('scrollHint').classList.remove('hide'),
+});
+
+/* ================= Reveal-on-scroll ================= */
+gsap.utils.toArray('[data-reveal]').forEach((el)=>{
+  gsap.to(el, {
+    opacity:1, y:0, duration:0.9, ease:'power3.out',
+    scrollTrigger:{ trigger: el, start:'top 85%' }
+  });
+});
+
+if(!isTouch){
+  document.body.classList.add('has-cursor');
+
+  const dot = document.getElementById('cursorDot');
+  const ring = document.getElementById('cursorRing');
+  const label = document.getElementById('cursorLabel');
+
+  const dotX = gsap.quickTo(dot, 'x', {duration:0.08, ease:'power3.out'});
+  const dotY = gsap.quickTo(dot, 'y', {duration:0.08, ease:'power3.out'});
+  const ringX = gsap.quickTo(ring, 'x', {duration:0.35, ease:'power3.out'});
+  const ringY = gsap.quickTo(ring, 'y', {duration:0.35, ease:'power3.out'});
+
+  window.addEventListener('mousemove', (e)=>{
+    dotX(e.clientX); dotY(e.clientY);
+    ringX(e.clientX); ringY(e.clientY);
+  });
+
+  const cursorText = {view:'VIEW', go:'GO'};
+  document.querySelectorAll('[data-cursor]').forEach(el=>{
+    el.addEventListener('mouseenter', ()=>{ ring.classList.add('active'); label.textContent = cursorText[el.dataset.cursor] || ''; });
+    el.addEventListener('mouseleave', ()=>{ ring.classList.remove('active'); label.textContent = ''; });
+  });
+
+  document.querySelectorAll('[data-magnetic]').forEach(el=>{
+    const mx = gsap.quickTo(el, 'x', {duration:0.3, ease:'power3.out'});
+    const my = gsap.quickTo(el, 'y', {duration:0.3, ease:'power3.out'});
+    el.addEventListener('mousemove', (e)=>{
+      const r = el.getBoundingClientRect();
+      mx((e.clientX - r.left - r.width/2) * 0.35);
+      my((e.clientY - r.top - r.height/2) * 0.35);
+    });
+    el.addEventListener('mouseleave', ()=>{ mx(0); my(0); });
+  });
+
+  const preview = document.getElementById('workPreview');
+  const previewLabel = document.getElementById('workPreviewLabel');
+  const pX = gsap.quickTo(preview, 'x', {duration:0.5, ease:'power3.out'});
+  const pY = gsap.quickTo(preview, 'y', {duration:0.5, ease:'power3.out'});
+
+  let activePreviewItem = null;
+  function hidePreview(){
+    activePreviewItem = null;
+    gsap.to(preview, {opacity:0, scale:0.7, duration:0.3, ease:'power3.out', overwrite:true});
+  }
+
+  document.querySelectorAll('.work-item').forEach(item=>{
+    item.addEventListener('mousemove', (e)=>{ pX(e.clientX); pY(e.clientY); });
+    item.addEventListener('mouseenter', ()=>{
+      activePreviewItem = item;
+      const color = item.dataset.previewColor || '#d4ff3d';
+      preview.style.background = `linear-gradient(160deg, ${color}55, #0a0a0a)`;
+      previewLabel.textContent = item.dataset.previewLabel || '';
+      gsap.to(preview, {opacity:1, scale:1, duration:0.4, ease:'power3.out', overwrite:true});
+    });
+    item.addEventListener('mouseleave', ()=>{
+      if(activePreviewItem === item) hidePreview();
+    });
+  });
+
+  // failsafe: browsers occasionally miss a mouseleave (fast pointer moves, element
+  // re-layout from scroll-reveal, etc). Verify on every move that the cursor is still
+  // actually inside the item we think is active — if not, force-hide.
+  window.addEventListener('mousemove', (e)=>{
+    if(!activePreviewItem) return;
+    const r = activePreviewItem.getBoundingClientRect();
+    const inside = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+    if(!inside) hidePreview();
+  });
+  // the mousemove check above can't catch it: scrolling moves the item out from under
+  // a stationary cursor without firing any mouse event at all, so hide immediately on scroll
+  window.addEventListener('scroll', hidePreview, {passive:true});
+  // also catch the cursor leaving the browser window/tab entirely
+  document.addEventListener('mouseleave', ()=>{ if(activePreviewItem) hidePreview(); });
+  window.addEventListener('blur', ()=>{ if(activePreviewItem) hidePreview(); });
+
+  document.querySelectorAll('[data-tilt]').forEach(card=>{
+    card.addEventListener('mousemove', (e)=>{
+      const r = card.getBoundingClientRect();
+      const px = (e.clientX - r.left) / r.width - 0.5;
+      const py = (e.clientY - r.top) / r.height - 0.5;
+      gsap.to(card, {rotateY: px*4, rotateX: -py*4, duration:0.4, ease:'power3.out', transformPerspective:1200});
+    });
+    card.addEventListener('mouseleave', ()=>{ gsap.to(card, {rotateY:0, rotateX:0, duration:0.5, ease:'power3.out'}); });
+  });
+}
+</script>
+</body>
+</html>
