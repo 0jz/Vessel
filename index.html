@@ -483,63 +483,68 @@ const isTouch = window.matchMedia('(pointer:coarse)').matches;
       float tile = gridLine(uv, uSpacingTile, uLineTile);
 
       // ---- procedural color grading: dark charcoal base, pastel-green accents ----
-      // nuv recovers the same normalized [-0.5, 0.5] local coordinate the vertex shader calls
-      // lp (vLocal = lp * uScale), so every noise sample below is resolution/window-size
-      // independent — it won't re-scale itself when the browser is resized.
-      vec2 nuv = vLocal / uScale;
+      // Snap to the finest ("pixel") grid tier before sampling anything — "rounded up" means
+      // ceil() to the nearest pixel-tier cell boundary — so every noise/ripple term below reads
+      // as blocky, grid-aligned patches instead of a smooth wash that ignores the grid it's
+      // sitting on top of.
+      vec2 uvSnapped = ceil(uv / uSpacingPixel) * uSpacingPixel;
+      vec2 nuv = uvSnapped / uScale;
       // NaN guard: the mesh's extreme bend/fold can leave a small fraction of triangles
       // near-degenerate at the outer fold edges, and some rasterizers interpolate varyings
-      // to NaN across those triangles rather than a merely-extreme finite value. A grid line's
-      // antialiasing failing silently in one such corner fragment was never visible before, but
-      // this fill covers the whole surface, so a NaN here would otherwise propagate through
-      // every noise/color calculation below and silently blank out exactly the high-curvature
-      // "ridge" areas the whole effect is supposed to highlight. Falling back to the origin is
-      // a safe, inert default — it just contributes one more "flat/dark" sample.
+      // to NaN across those triangles rather than a merely-extreme finite value. Falling back
+      // to the origin is a safe, inert default — it just contributes one more "flat/dark" sample.
       if(nuv.x != nuv.x || nuv.y != nuv.y) nuv = vec2(0.0);
       float curvature = (vCurvature == vCurvature) ? vCurvature : 0.0;
 
-      // the same FBM, same frequency, the vertex shader used for its crinkle displacement —
-      // sampled fresh per-fragment (rather than interpolated from the coarse 140x90 vertex
-      // mesh) since color needs full fragment resolution but displacement only needed to be
-      // felt at vertex density.
+      // the same FBM, same frequency, the vertex shader used for its crinkle displacement
       float nDisp = fbm4(nuv * ${NOISE_DISP_FREQ.toFixed(2)});
 
-      // a second, much larger-scale layer — a handful of broad patches across the whole
-      // plane, unrelated in frequency to the fine crinkle, so the color doesn't just trace
-      // the crinkle's own "height" and read as simple contour bands
-      float nLarge = fbm3(nuv * 0.55 + vec2(11.3, -7.1));
+      // large-scale layer — now drifting over time (was static before) so the broad patches
+      // themselves travel across the surface, not just the ambient term
+      float nLarge = fbm3(nuv * 0.55 + vec2(11.3, -7.1) + vec2(uTime * 0.05, -uTime * 0.04));
 
-      // gentle ambient variation: very low frequency, slowly drifting over time, independent
-      // of both layers above
-      float nAmbient = fbm3(nuv * 0.22 + vec2(uTime * 0.008, -uTime * 0.006));
+      // ambient variation — sped up considerably (was 0.008/-0.006, now ~6x faster)
+      float nAmbient = fbm3(nuv * 0.22 + vec2(uTime * 0.05, -uTime * 0.04));
 
-      // surface curvature: the real analytic fold curvature from the vertex shader — high
-      // exactly where the paper is actually creasing hardest (same edge*edge weighting the
-      // fold displacement itself uses) — rather than a noise-derived proxy. This is genuine
-      // geometry, not an approximation of it (already NaN-guarded and declared above, next to
-      // the nuv guard, since both come from varyings and needed the same protection). An
-      // earlier version also blended in a finite-difference "slope" of the noise field for
-      // extra curvature-like variation, but vCurvature alone is simpler, still geometrically
-      // faithful, and was easier to verify correct once the real bug (NaN varyings, not the
-      // extra noise taps) turned out to be the actual cause of the missing color.
+      // ripple: a ring expanding outward from center, cycling slowly enough to read as
+      // occasional pulses rather than a constant metronome, and shaped with angle-dependent
+      // noise so the ring itself is squiggly/organic instead of a perfect circle.
+      float rippleDist = length(nuv);
+      float ripplePeriod = 4.2; // less often than before (was 1.6s)
+      float rippleCycle = floor(uTime / ripplePeriod);
+      float ripplePhase = fract(uTime / ripplePeriod);
+      // a random seed per cycle (hash of the cycle index) shifts where the squiggle noise
+      // samples from, so each pulse gets a different wobble shape instead of the same one
+      // repeating — "randomise the wobbliness"
+      float cycleSeed = hash21(vec2(rippleCycle, rippleCycle * 1.37)) * 40.0;
+      float rippleAngle = atan(nuv.y, nuv.x);
+      // angle-dependent noise perturbs the ring's radius differently all the way around, and
+      // drifts slowly over time within a cycle too, so the squiggle keeps evolving rather than
+      // holding one fixed wobbly shape for the whole pulse
+      float rippleSquiggle = fbm3(vec2(cos(rippleAngle), sin(rippleAngle)) * 3.0 + uTime * 0.08 + cycleSeed) - 0.5;
+      float rippleRadius = ripplePhase * 0.9 + rippleSquiggle * 0.22;
+      float rippleRing = 1.0 - smoothstep(0.0, 0.1, abs(rippleDist - rippleRadius));
+      // sharp attack (first ~5% of the cycle) then the existing gradual decay over the rest —
+      // so it snaps into existence at the center rather than easing in, then expands outward
+      // and fades — "appear out of nowhere in the middle"
+      float rippleAttack = smoothstep(0.0, 0.05, ripplePhase);
+      float rippleFade = (1.0 - ripplePhase) * rippleAttack;
+      float ripple = rippleRing * rippleFade;
 
-      // weighted combination, deliberately not dominated by nDisp — color should emerge from
-      // broad terrain + curvature + ambient drift, not trace the fine crinkle's height 1:1.
-      // Weights don't sum to 1 here on purpose: summing several already-normalized FBM layers
-      // as a true weighted average clusters tightly around their shared mean (verified by
-      // simulating this exact formula outside the shader — a naively-weighted average only
-      // ever reached about 0.29-0.38, nowhere near a usable smoothstep band), so this combines
-      // them with larger, unnormalized weights to get enough spread for the threshold below to
-      // actually carve out a small minority of the surface.
-      float rawMask = nLarge * 0.7 + curvature * 0.5 + nAmbient * 0.25 + nDisp * 0.15;
+      // weighted combination — heavier weights and the new ripple term than before, for more
+      // overall coverage ("add more of the coloring"). Weights still don't sum to 1 on purpose:
+      // summing several already-normalized FBM layers as a true weighted average clusters
+      // tightly around their shared mean (verified by simulating this outside the shader), so
+      // this uses larger, unnormalized weights to get enough spread for the threshold below.
+      float rawMask = nLarge * 0.9 + curvature * 0.6 + nAmbient * 0.35 + nDisp * 0.2 + ripple * 0.8;
 
-      // Very smooth (smoothstep, not linear), and both edges tuned against the actual observed
-      // spread of rawMask above (empirically ~0.48-0.65 across the visible frame, before
-      // vCurvature's own extra contribution near the folded edges pushes it higher there) so
-      // that only roughly the top 10-15% of that range differs from pure dark at all, and only
-      // its top couple percent reaches full pastel green — this is what keeps the composition
-      // 80-90%+ dark rather than an even gradient across the whole surface.
-      float mask = smoothstep(0.585, 0.62, rawMask);
+      // Recalibrated against the actual simulated distribution of the new, heavier-weighted
+      // rawMask above (including curvature and the ripple term) rather than reused from the
+      // old formula — the old 0.585-0.62 band sat entirely below this new formula's range and
+      // would have saturated to 100% coverage all the time, which isn't "more coloring", it's
+      // losing the accent character (and the ripple) entirely. This band gives roughly 25-50%
+      // coverage that visibly rises and falls with the ripple cycle instead of a flat wash.
+      float mask = smoothstep(0.95, 1.2, rawMask);
 
       // soft edge falloff toward charcoal at the visible frame's corners. Rescaling by MARGIN
       // maps the actual visible viewport back to roughly r in [0, 0.5] — the plane geometry
@@ -550,9 +555,13 @@ const isTouch = window.matchMedia('(pointer:coarse)').matches;
       mask *= edgeFalloff;
 
       vec3 darkBase = vec3(0.0392, 0.0392, 0.0392);   // #0a0a0a — the page's own theme background
-      vec3 warmAccent = vec3(0.6549, 0.9098, 0.7098); // #A7E8B5 — soft pastel green
-      vec3 fillColor = mix(darkBase, warmAccent, mask);
-      float fillAlpha = mix(0.12, 0.5, mask); // dark areas stay a faint, barely-there charcoal wash; green ridges pick up real presence
+      vec3 deepAccent = vec3(0.1176, 0.2510, 0.1804); // #1E402E — a deep, saturated green: the gradient's midpoint, for more depth than a flat two-color lerp
+      vec3 warmAccent = vec3(0.6549, 0.9098, 0.7098); // #A7E8B5 — soft pastel green, the highlight
+      // two-stage mix so the transition actually passes through something richer than a
+      // straight-line blend between dark and pastel — "way deeper" gradient
+      vec3 fillColor = mix(darkBase, deepAccent, smoothstep(0.0, 0.55, mask));
+      fillColor = mix(fillColor, warmAccent, smoothstep(0.45, 1.0, mask));
+      float fillAlpha = mix(0.14, 0.62, mask); // more presence than before (was 0.12-0.5) — "add more of the coloring"
 
       // Composited as layers, not summed: tile lines are exact multiples of cell lines,
       // which are exact multiples of pixel lines, so a tile line is *also* a cell line and
@@ -580,7 +589,7 @@ const isTouch = window.matchMedia('(pointer:coarse)').matches;
       alpha = mix(alpha, max(alpha, 0.16) * pixelBrightness, pixel);
 
       col = mix(col, uColorCell, cell);
-      alpha = mix(alpha, max(alpha, 0.28), cell);
+      alpha = mix(alpha, max(alpha, 0.14), cell); // more transparent than before (was 0.28) — "medium squares more transparent"
 
       col = mix(col, uColorTile, tile);
       alpha = mix(alpha, max(alpha, 0.42), tile);
