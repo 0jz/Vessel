@@ -589,7 +589,7 @@ const isTouch = window.matchMedia('(pointer:coarse)').matches;
       alpha = mix(alpha, max(alpha, 0.16) * pixelBrightness, pixel);
 
       col = mix(col, uColorCell, cell);
-      alpha = mix(alpha, max(alpha, 0.14), cell); // more transparent than before (was 0.28) — "medium squares more transparent"
+      alpha = mix(alpha, max(alpha, 0.03), cell); // almost fully transparent — barely a hint of the medium grid tier
 
       col = mix(col, uColorTile, tile);
       alpha = mix(alpha, max(alpha, 0.42), tile);
@@ -656,7 +656,7 @@ const isTouch = window.matchMedia('(pointer:coarse)').matches;
     uWobbleAmp: {value: 1},
     uColorPixel: {value: new THREE.Color(0xf2f2ed)},
     uColorCell: {value: new THREE.Color(0xf2f2ed)},
-    uColorTile: {value: new THREE.Color(0x1a1a1a)}
+    uColorTile: {value: new THREE.Color(0x4a4a4a)}
   };
 
   const material = new THREE.ShaderMaterial({
@@ -776,6 +776,25 @@ PALETTE.forEach(c => brightMaterials[c] = new THREE.MeshBasicMaterial({color:c, 
 /* --- play area walls: objects bounce inside this box --- */
 const BOUNDS = {x:9, y:23, z:6.5};
 
+// Where the hero's WebGL grid background actually fades to black: the same #vision
+// ScrollTrigger that drives that fade ('top bottom' -> 'top center') is re-measured here in
+// absolute scroll pixels, then converted through the same scroll-progress -> world-y mapping
+// the camera itself uses (see camera.position.y in animate() below) — so this is the *real*
+// fade point for this page's actual content height, not a guessed fraction that would drift
+// out of sync if a section above #vision changes size.
+function computeVisionFadeY(){
+  const visionEl = document.getElementById('vision');
+  const scrollable = document.documentElement.scrollHeight - window.innerHeight;
+  if(!visionEl || scrollable <= 0) return 0;
+  const visionAbsTop = visionEl.getBoundingClientRect().top + window.scrollY;
+  const fadeStartScroll = visionAbsTop - window.innerHeight;   // ScrollTrigger start: 'top bottom'
+  const fadeDoneScroll = visionAbsTop - window.innerHeight/2;  // ScrollTrigger end: 'top center' — fully black
+  const progress = THREE.MathUtils.clamp((fadeStartScroll + fadeDoneScroll) / 2 / scrollable, 0, 1);
+  return -progress * (BOUNDS.y*1.9) + BOUNDS.y*0.4;
+}
+const SPAWN_CENTER_Y = THREE.MathUtils.clamp(computeVisionFadeY(), -BOUNDS.y*0.85, BOUNDS.y*0.85);
+const SPAWN_SPREAD_Y = 6; // tight cluster around the fade point rather than spread across the whole play area
+
 const nodes = [];
 const COUNT = 58;
 for(let i=0;i<COUNT;i++){
@@ -784,7 +803,7 @@ for(let i=0;i<COUNT;i++){
   mesh.scale.setScalar(scale);
   mesh.position.set(
     THREE.MathUtils.randFloatSpread(BOUNDS.x*2*0.9),
-    THREE.MathUtils.randFloatSpread(BOUNDS.y*2*0.9),
+    SPAWN_CENTER_Y + THREE.MathUtils.randFloatSpread(SPAWN_SPREAD_Y),
     THREE.MathUtils.randFloatSpread(BOUNDS.z*2*0.9)
   );
   mesh.userData.spin = THREE.MathUtils.randFloat(0.05, 0.3) * (Math.random() > .5 ? 1 : -1);
