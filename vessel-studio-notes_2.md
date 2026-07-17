@@ -519,6 +519,103 @@ doesn't look right (too rare, too common, wrong spots) in an actual browser, tha
 threshold-tuning question (cheap to adjust) rather than the structural bug this pass already found
 and fixed.
 
+### Fourth pass — more coverage, faster movement, pixel-snapped, deeper gradient, ripple
+
+Per request, several changes to the color grading at once:
+
+- **Pixel-snapped sampling**: `uv` is now snapped to the finest grid tier's cell boundaries via
+  `ceil(uv / uSpacingPixel) * uSpacingPixel` before any noise/ripple sampling — "appear only on
+  pixels rounded up" — so the coloring reads as blocky patches aligned to the grid instead of a
+  smooth wash that ignores it.
+- **Faster movement**: `nLarge` and `nAmbient`'s time coefficients went from 0.008/-0.006 to
+  0.05/-0.04 (roughly 6x), and `nLarge` now drifts over time too (it was static before).
+- **Ripple**: a new term — a ring at `length(nuv) ≈ fract(uTime/1.6) * 0.9`, i.e. a radius that
+  expands from center once every 1.6 seconds and resets, fading out as it expands
+  (`rippleFade = 1 - phase`). Reads as a pulse that completes and restarts quickly rather than a
+  steady-state wave, per "make the coloring end quickly and start again... behave like a ripple."
+- **Deeper gradient**: added a third color stop — dark (#0a0a0a) → deep green (#1E402E) → pastel
+  highlight (#A7E8B5) — via two staged `smoothstep`-based mixes, instead of a flat two-color lerp.
+  Fill alpha raised too (0.12-0.5 → 0.14-0.62) for more presence.
+- **More coverage**: rawMask's weights were all raised (nLarge 0.7→0.9, curvature 0.5→0.6,
+  nAmbient 0.25→0.35, nDisp 0.15→0.2) and the new ripple term (weight 0.8) added on top. This
+  shifted the formula's whole output range up substantially — simulating it (same Node.js
+  approach as the earlier alignment/spacing fixes) found the new range sits around 0.63-1.4
+  depending on ripple/curvature, versus the old formula's ~0.48-0.65 — so the threshold band was
+  **recalibrated from scratch** against the new simulated distribution
+  (`smoothstep(0.95, 1.2, rawMask)`) rather than nudged from the old one; the old threshold sat
+  entirely below the new range and would've saturated to 100% coverage at all times, which
+  reads as a flat wash, not "more of the accent." The recalibrated band gives roughly 25-50%
+  coverage depending on where the ripple currently is — a clear increase from the previous
+  pass's ~6-13%, while still leaving contrast and a visible pulse.
+
+Verified via the same two-track approach as the previous pass: shader compiles and runs with
+zero console/page errors, and the coverage math is checked by replicating the exact formula in
+a standalone Node script (not just eyeballed) — same reasoning as before about this sandbox
+having no GPU and unreliable NaN-comparison behavior under software rendering, so simulation is
+the more trustworthy check available here for anything about the *shape* of the distribution.
+Actual on-screen appearance (color balance, ripple timing feel, whether the pixel-snapping reads
+as intended) still needs a real-browser check.
+
+### Ripple retuned: less frequent, squiggly instead of a perfect circle
+
+`ripplePeriod` 1.6s → 4.2s, so the pulse reads as occasional rather than constant. The ring
+itself is no longer a perfect circle — `rippleRadius` now gets an angle-dependent noise offset
+(`fbm3` sampled around `cos/sin(atan(nuv.y,nuv.x))`, drifting slowly over time so the squiggle
+shape itself evolves rather than repeating identically every cycle) — "more squiggly/ripply"
+instead of a clean expanding ring.
+
+### Randomized ripple wobble + more transparent medium squares
+
+- Ripple squiggle now gets a per-cycle random seed (`hash21` of the cycle index, `floor(uTime/ripplePeriod)`) added into the noise sampling coordinate, so each pulse's wobble shape differs from the last instead of the same evolving pattern repeating every cycle.
+- Medium ("cell" tier) squares' line alpha: 0.28 → 0.14, for more transparency.
+
+### Ripple attack curve: snaps in at center instead of easing in
+
+Added `rippleAttack = smoothstep(0.0, 0.05, ripplePhase)`, multiplied into `rippleFade`, so the
+ripple's brightness ramps up sharply over just the first ~5% of each cycle instead of already
+being at full strength the instant the cycle starts — reads as popping into existence at the
+center ("appear out of nowhere in the middle") before expanding outward and fading over the
+rest of the cycle.
+
+### Vercel deployment investigation
+
+`https://vessel-five-alpha.vercel.app/` returns a platform-level `NOT_FOUND` (plain text,
+`x-vercel-error: NOT_FOUND` header) on every path checked — `/`, `/index.html`,
+`/vessel-studio.html` all identical. That's Vercel itself saying nothing is being served, not an
+app-level 404 page. Combined with a reported ~1 second deployment time (implausibly fast for any
+real build/upload), this points to either a build that failed instantly, an empty/no-op deploy,
+or the domain not being aliased to any successful deployment — needs the actual Vercel dashboard
+deployment log to confirm which. Couldn't get the Vercel MCP connector's tools to load despite it
+showing "connected," and no GitHub connector or connected browser was available in-session to
+push directly — files were handed off for the person to push manually instead.
+
+### Root cause found and fixed: filename mismatch, not a build failure
+
+Connected Claude for Chrome and pushed directly. The GitHub repo (`0jz/Vessel`) had the file
+committed as `vessel-studio_37.html`, not `index.html` — Vercel's static serving has nothing to
+route `/` to without an `index.html` at the root, which is exactly why every path 404'd
+identically. Renamed the file to `index.html` via GitHub's web editor and committed directly to
+`main`; Vercel auto-redeployed from the push and the domain started returning HTTP 200
+immediately. The ~1 second deploy time was a red herring in the end — not a failed build, just a
+trivial static deploy with nothing build-step-related to do.
+
+(Also worth noting for next time: the browser was initially logged into the `neskeee` GitHub
+account, which doesn't have write access to `0jz/Vessel` — GitHub offered a fork instead of
+letting the edit go through. Switching the browser to the `0jz` account resolved it.)
+
+### Full latest content pushed to GitHub, confirmed live
+
+Pushed the complete current `index.html` (ripple, color grading, pixel realism, all of it) via
+the same browser session — transmitted as gzip+base64 (54KB → ~24.5KB) to cut the browser
+round-trip cost, reconstructed and decompressed client-side via `DecompressionStream('gzip')`,
+copied to clipboard, and pasted into GitHub's editor. Verified the paste was complete by line
+count (1053 in the editor matching the local file's 1052+trailing-newline) rather than trusting
+`.cm-content` text length, which only reflects CodeMirror's virtualized/visible lines and
+under-reports for any file long enough to scroll. Commit landed
+("Enhance procedural color grading and ripple effects"), Vercel auto-redeployed, and the live
+site was confirmed serving the new version by checking for `ripplePeriod` (a string unique to
+the latest ripple code) in the deployed HTML.
+
 ## Todo / open items
 
 - [ ] Replace placeholder studio name, copy, and work items with real ones (PassportSOL, SlopGate,
