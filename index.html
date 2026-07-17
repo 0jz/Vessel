@@ -60,6 +60,10 @@
   #cursorRing.active{width:72px;height:72px;background:var(--accent);border-color:var(--accent);}
   #cursorRing.active span{opacity:1;}
   @media (pointer:coarse){#cursorDot,#cursorRing{display:none;}}
+  /* BUG (fixed): the drag/throw interaction is wired only through mouse events (no touch
+     equivalents), so this hint was promising an interaction that silently did nothing on
+     any touch device. Hide it there rather than add full touch-drag support out of scope. */
+  @media (pointer:coarse){.hero-hint2{display:none;}}
 
   #workPreview{
     position:fixed;top:0;left:0;z-index:150;pointer-events:none;
@@ -163,14 +167,28 @@
   .service-grid{display:grid;gap:24px;}
   @media(min-width:800px){.service-grid{grid-template-columns:1fr 1fr;}}
   .service-card{
-    background:rgba(10,10,10,.85);padding:60px 40px;border:1px solid var(--line);border-radius:4px;
+    position:relative;background:rgba(10,10,10,.85);padding:60px 40px;border:1px solid var(--line);border-radius:4px;
     transform-style:flat;backface-visibility:hidden;will-change:transform;overflow:hidden;
     transition:background-color .35s ease;
   }
   .service-card:hover{background:transparent;}
-  .service-num{font-size:12px;color:var(--accent);margin-bottom:24px;}
+  /* diagonal light-sweep on hover — a thin bright band that travels across the card */
+  .service-card::after{
+    content:'';position:absolute;inset:0;pointer-events:none;
+    background:linear-gradient(115deg, transparent 40%, rgba(212,255,61,.14) 50%, transparent 60%);
+    transform:translateX(-130%);transition:transform .7s ease;
+  }
+  .service-card:hover::after{transform:translateX(130%);}
+  .service-num{font-size:12px;color:var(--accent);margin-bottom:24px;display:inline-block;transition:transform .35s ease,color .35s ease;}
+  .service-card:hover .service-num{transform:scale(1.2);color:var(--fg);}
   .service-title{font-size:clamp(22px,2.6vw,34px);margin-bottom:18px;word-break:break-word;overflow-wrap:break-word;}
   .service-desc{font-size:14px;color:var(--muted);line-height:1.7;max-width:420px;}
+
+  /* word-mask reveal: each word sits in an overflow-hidden mask and slides up into view from
+     below, rather than the whole block fading as one unit — used on .service-title and
+     .footer-title (see maskRevealWords() in the script). */
+  .word-mask{display:inline-block;overflow:hidden;vertical-align:top;}
+  .word{display:inline-block;will-change:transform;}
 
   footer{padding:100px 28px 40px;border-top:1px solid var(--line);background:rgba(10,10,10,.75);}
   .footer-top{display:flex;flex-wrap:wrap;justify-content:space-between;gap:40px;margin-bottom:80px;}
@@ -284,12 +302,12 @@
 <section id="services">
   <div class="label mono">HOW WE WORK</div>
   <div class="service-grid">
-    <div class="service-card" data-tilt data-reveal>
+    <div class="service-card" data-tilt>
       <div class="service-num mono">01</div>
       <div class="service-title display">Realtime Engine Experiences</div>
       <p class="service-desc">We design and build inside game engines — turning brand worlds, IP, and artist identities into playable, scalable spaces that reach audiences wherever they already are.</p>
     </div>
-    <div class="service-card" data-tilt data-reveal>
+    <div class="service-card" data-tilt>
       <div class="service-num mono">02</div>
       <div class="service-title display">Persistent World Platforms</div>
       <p class="service-desc">From cloud rendering to native mobile, we ship multi-user spaces with avatars, live events, and commerce baked in — built once, deployed everywhere.</p>
@@ -317,7 +335,7 @@
   </div>
   <div class="footer-bottom mono">
     <span>© 2026 VESSEL STUDIO</span>
-    <span>Template inspired by immersive-studio site patterns</span>
+    <span>Design inspired by <a href="https://alche.studio" target="_blank" rel="noopener noreferrer" data-cursor="go">alche.studio</a></span>
   </div>
 </footer>
 
@@ -348,24 +366,32 @@ const visionFieldState = {hidden: false};
     frames.push(img);
   }
 
+  let lastFrameIndex = -1;
+  let lastDrawOk = false;
+
   function resizeCanvas(){
     const dpr = Math.min(window.devicePixelRatio, 2);
     canvas.width = canvas.clientWidth * dpr;
     canvas.height = canvas.clientHeight * dpr;
+    // BUG (fixed): resizing used to only resize the backing buffer, never redraw into it —
+    // the canvas went blank (cleared by the resize itself) until the next scroll event, which
+    // might not come for a while on a device/orientation change that isn't accompanied by a
+    // scroll. Force a redraw of whatever frame is current immediately after resizing.
+    lastDrawOk = false;
+    onScrollScrub();
   }
-  resizeCanvas();
   window.addEventListener('resize', resizeCanvas);
 
-  let lastFrameIndex = -1;
   function drawFrame(index){
     const img = frames[index];
-    if(!img.complete || !img.naturalWidth) return; // not loaded yet — keep last drawn frame
+    if(!img.complete || !img.naturalWidth) return false; // not loaded yet
     const cw = canvas.width, ch = canvas.height;
     const iw = img.naturalWidth, ih = img.naturalHeight;
     const scale = Math.max(cw / iw, ch / ih); // cover, matches object-fit:cover
     const dw = iw * scale, dh = ih * scale;
     ctx.clearRect(0, 0, cw, ch);
     ctx.drawImage(img, (cw - dw) / 2, (ch - dh) / 2, dw, dh);
+    return true;
   }
 
   function onScrollScrub(){
@@ -375,14 +401,22 @@ const visionFieldState = {hidden: false};
       ? Math.min(Math.max((window.scrollY - sectionTop) / scrollableRange, 0), 1)
       : 0;
     const frameIndex = Math.round(progress * (FRAME_COUNT - 1));
-    if(frameIndex !== lastFrameIndex){
+    // BUG (fixed): lastFrameIndex used to be set as soon as we *targeted* a frame, not once
+    // it was actually drawn. If that frame's image hadn't finished loading yet (a real
+    // possibility scrolling fast through ~10MB of frames), drawFrame() silently no-op'd and
+    // the canvas got stuck on a stale frame — and since lastFrameIndex already matched,
+    // scrolling back to that same frame later never retried the draw either. Now a target
+    // frame keeps retrying (via the resize/load hooks and this guard) until it actually draws.
+    if(frameIndex !== lastFrameIndex || !lastDrawOk){
       lastFrameIndex = frameIndex;
-      drawFrame(frameIndex);
+      lastDrawOk = drawFrame(frameIndex);
     }
   }
   window.addEventListener('scroll', onScrollScrub, {passive:true});
   window.addEventListener('load', onScrollScrub);
-  frames[0].addEventListener('load', onScrollScrub); // draw frame 0 as soon as it's ready
+  // retry once any frame finishes loading — covers the case above where the target frame
+  // wasn't ready yet when we first scrolled to it
+  frames.forEach(img => img.addEventListener('load', onScrollScrub));
   onScrollScrub();
 
   // hide the flying-object field for the duration of the scrub, matching the pin exactly
@@ -434,8 +468,7 @@ const visionFieldState = {hidden: false};
    - The pattern itself doesn't move when you scroll — same as alche.studio, whose hero background
      stays put while the page scrolls over it. The only scroll-linked thing is a fade: a
      ScrollTrigger on `#vision` fades the whole layer out right as that section arrives, since
-     "Immersive worlds..." there is where this hands off to the glass panel (which already has a
-     video/gif slot planned — see notes.md). */
+     "Immersive worlds..." there is where this hands off to the scrubbed frame-sequence video. */
 (function(){
   const hostCanvas = document.getElementById('bgGridCanvas');
   if(!hostCanvas || !window.THREE) return;
@@ -1108,7 +1141,13 @@ function animate(){
   const progress = getScrollProgress();
   camera.position.y = -progress * (BOUNDS.y*1.9) + BOUNDS.y*0.4;
 
-  stepPhysics(dt);
+  // BUG (fixed): physics used to keep stepping (and spawning wall-hit splats) even while the
+  // field is hidden behind the #vision video. #vision paints no opaque background in the
+  // margin gaps around its glass-bezel frame, so a wall-hit splat (z-index:1, below #vision's
+  // z-index:5 but above the background) could flash through those gaps with no visible object
+  // to explain it. Freezing physics while hidden also means objects resume from wherever they
+  // actually were instead of having silently drifted the whole time no one could see them.
+  if(!visionFieldState.hidden) stepPhysics(dt);
 
   camera.position.x += (mouseX*1.4 - camera.position.x) * 0.04;
   camera.lookAt(0, camera.position.y, 0);
@@ -1142,6 +1181,73 @@ gsap.utils.toArray('[data-reveal]').forEach((el)=>{
     opacity:1, y:0, duration:0.9, ease:'power3.out',
     scrollTrigger:{ trigger: el, start:'top 85%' }
   });
+});
+
+/* ================= #services / #contact — word-mask reveals =================
+   Wraps every word of an element in a small overflow-hidden mask (.word-mask > .word) so
+   each word can slide up from below its own mask into view, instead of the whole line
+   fading as one flat block. Walks text nodes only, so surrounding markup (<br>, <em>) is
+   left exactly where it was. */
+function maskRevealWords(el){
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+  const textNodes = [];
+  let n;
+  while(n = walker.nextNode()) textNodes.push(n);
+  const words = [];
+  textNodes.forEach(textNode => {
+    const frag = document.createDocumentFragment();
+    textNode.textContent.split(/(\s+)/).filter(Boolean).forEach(token => {
+      if(/^\s+$/.test(token)){
+        frag.appendChild(document.createTextNode(token));
+        return;
+      }
+      const mask = document.createElement('span');
+      mask.className = 'word-mask';
+      const word = document.createElement('span');
+      word.className = 'word';
+      word.textContent = token;
+      mask.appendChild(word);
+      frag.appendChild(mask);
+      words.push(word);
+    });
+    textNode.parentNode.replaceChild(frag, textNode);
+  });
+  return words;
+}
+
+const reducedMotionUI = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+if(reducedMotionUI){
+  // no mask animation for reduced-motion users — just show the text normally, unsplit
+} else {
+  document.querySelectorAll('.service-title, .footer-title').forEach(el=>{
+    const words = maskRevealWords(el);
+    gsap.set(words, {yPercent:115});
+    gsap.to(words, {
+      yPercent:0, duration:0.9, ease:'power4.out', stagger:0.035,
+      scrollTrigger:{ trigger: el, start:'top 88%' }
+    });
+  });
+}
+
+// service cards: staggered entrance (card 2 follows card 1) with a scale+blur pop, instead
+// of both fading in near-simultaneously the way the generic [data-reveal] system would
+gsap.utils.toArray('.service-card').forEach((card, i)=>{
+  gsap.from(card, {
+    opacity:0, y:40, scale:0.96, filter:'blur(6px)',
+    duration:0.8, delay:i*0.15, ease:'power3.out',
+    scrollTrigger:{ trigger: '.service-grid', start:'top 82%' }
+  });
+});
+
+// footer: nav columns and the bottom credit line stagger up after the headline word-reveal
+gsap.from('.footer-col', {
+  opacity:0, y:24, duration:0.7, stagger:0.1, ease:'power3.out',
+  scrollTrigger:{ trigger: '.footer-cols', start:'top 90%' }
+});
+gsap.from('.footer-bottom', {
+  opacity:0, y:16, duration:0.7, ease:'power3.out',
+  scrollTrigger:{ trigger: '.footer-bottom', start:'top 95%' }
 });
 
 if(!isTouch){
