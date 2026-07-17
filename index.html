@@ -18,7 +18,8 @@
     --my:50vh;
   }
   *{box-sizing:border-box;margin:0;padding:0;}
-  html,body{background:var(--bg);color:var(--fg);font-family:'Inter',sans-serif;overflow-x:hidden;}
+  html{overflow-x:hidden;}
+  body{background:var(--bg);color:var(--fg);font-family:'Inter',sans-serif;}
   body.has-cursor, body.has-cursor *{cursor:none !important;}
   ::selection{background:var(--accent);color:#0a0a0a;}
   a{color:inherit;text-decoration:none;}
@@ -118,14 +119,18 @@
   .work-tags{display:flex;gap:8px;flex-wrap:wrap;}
   .work-tags span{font-size:10px;border:1px solid var(--line);padding:5px 10px;border-radius:100px;color:var(--muted);}
 
-  #mission,#vision{min-height:80svh;display:flex;align-items:center;justify-content:center;text-align:center;}
+  #mission{min-height:80svh;display:flex;align-items:center;justify-content:center;text-align:center;}
   .big-line{font-size:clamp(30px,5.4vw,68px);max-width:1000px;line-height:1.08;}
   .big-line em{color:var(--accent);font-style:normal;}
-  #vision{position:relative;overflow:hidden;}
-  /* Drop the generated loop's src on #visionVideo (mp4/webm) to light this up — everything
-     else (sizing, fade, layering behind the glass panel) is already wired. Poster/background
-     color shows until a src is set so nothing looks broken in the meantime. */
-  #visionVideo{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.55;
+  /* #vision is a tall (400vh) scroll track; .vision-pin sticks to the viewport for its
+     duration so the 96-frame sequence can be scrubbed frame-by-frame against scroll
+     position — reads like scrubbing a video instead of a section just scrolling past. */
+  #vision{position:relative;height:400vh;padding:0;}
+  .vision-pin{
+    position:sticky;top:0;height:100svh;width:100%;overflow:hidden;
+    display:flex;align-items:center;justify-content:center;text-align:center;
+  }
+  #visionCanvas{position:absolute;inset:0;width:100%;height:100%;opacity:.55;
     -webkit-mask-image:radial-gradient(ellipse at center, #000 55%, transparent 85%);
     mask-image:radial-gradient(ellipse at center, #000 55%, transparent 85%);}
   .glass-panel{
@@ -250,10 +255,11 @@
 </section>
 
 <section id="vision">
-  <!-- swap the empty src for the generated object -> deconstruction loop (mp4/webm ideally, gif works too) -->
-  <video id="visionVideo" autoplay muted loop playsinline></video>
-  <div class="glass-panel" data-reveal>
-    <p class="big-line display">Immersive worlds, built to be<br><em>felt</em> — not just seen.</p>
+  <div class="vision-pin">
+    <canvas id="visionCanvas"></canvas>
+    <div class="glass-panel" data-reveal>
+      <p class="big-line display">Immersive worlds, built to be<br><em>felt</em> — not just seen.</p>
+    </div>
   </div>
 </section>
 
@@ -303,6 +309,77 @@
 <script>
 gsap.registerPlugin(ScrollTrigger);
 const isTouch = window.matchMedia('(pointer:coarse)').matches;
+
+/* ================= #vision scroll-scrubbed frame sequence =================
+   96 pre-rendered frames (assets/vision-frames/frame_00.png..frame_95.png), drawn onto a
+   canvas one at a time based on scroll position within the (sticky-pinned) #vision section
+   — the classic "scrub a video by scrolling" technique. #vision itself is the tall (400vh)
+   scroll track; its child .vision-pin sticks to the viewport for that whole distance, so
+   using #vision's own top/bottom as the 0..1 progress range lines up exactly with the pin's
+   start and end. */
+const visionFieldState = {hidden: false};
+(function(){
+  const FRAME_COUNT = 96;
+  const canvas = document.getElementById('visionCanvas');
+  const ctx = canvas.getContext('2d');
+  const section = document.getElementById('vision');
+  const frames = [];
+  for(let i=0;i<FRAME_COUNT;i++){
+    const img = new Image();
+    img.src = `assets/vision-frames/frame_${String(i).padStart(2,'0')}.png`;
+    frames.push(img);
+  }
+
+  function resizeCanvas(){
+    const dpr = Math.min(window.devicePixelRatio, 2);
+    canvas.width = canvas.clientWidth * dpr;
+    canvas.height = canvas.clientHeight * dpr;
+  }
+  resizeCanvas();
+  window.addEventListener('resize', resizeCanvas);
+
+  let lastFrameIndex = -1;
+  function drawFrame(index){
+    const img = frames[index];
+    if(!img.complete || !img.naturalWidth) return; // not loaded yet — keep last drawn frame
+    const cw = canvas.width, ch = canvas.height;
+    const iw = img.naturalWidth, ih = img.naturalHeight;
+    const scale = Math.max(cw / iw, ch / ih); // cover, matches object-fit:cover
+    const dw = iw * scale, dh = ih * scale;
+    ctx.clearRect(0, 0, cw, ch);
+    ctx.drawImage(img, (cw - dw) / 2, (ch - dh) / 2, dw, dh);
+  }
+
+  function onScrollScrub(){
+    const scrollableRange = section.offsetHeight - window.innerHeight;
+    const sectionTop = section.getBoundingClientRect().top + window.scrollY;
+    const progress = scrollableRange > 0
+      ? Math.min(Math.max((window.scrollY - sectionTop) / scrollableRange, 0), 1)
+      : 0;
+    const frameIndex = Math.round(progress * (FRAME_COUNT - 1));
+    if(frameIndex !== lastFrameIndex){
+      lastFrameIndex = frameIndex;
+      drawFrame(frameIndex);
+    }
+  }
+  window.addEventListener('scroll', onScrollScrub, {passive:true});
+  window.addEventListener('load', onScrollScrub);
+  frames[0].addEventListener('load', onScrollScrub); // draw frame 0 as soon as it's ready
+  onScrollScrub();
+
+  // hide the flying-object field for the duration of the scrub, matching the pin exactly
+  ScrollTrigger.create({
+    trigger: '#vision', start: 'top top', end: 'bottom bottom',
+    onEnter: ()=> visionFieldState.hidden = true,
+    onLeave: ()=> visionFieldState.hidden = false,
+    onEnterBack: ()=> visionFieldState.hidden = true,
+    onLeaveBack: ()=> visionFieldState.hidden = false,
+  });
+  gsap.timeline({scrollTrigger:{trigger:'#vision', start:'top top', end:'bottom bottom', scrub:true}})
+    .to('#glWrap', {opacity:0, duration:0.05})
+    .to('#glWrap', {opacity:0, duration:0.9})
+    .to('#glWrap', {opacity:1, duration:0.05});
+})();
 
 /* ================= WEBGL background grid — real bent plane, alche-style =================
    This now follows alche.studio's actual hero technique directly rather than approximating it:
@@ -817,9 +894,30 @@ window.addEventListener('mousemove', (e)=>{
   targetMouseY = (e.clientY / window.innerHeight - 0.5);
 });
 
+// The object field is only ever visible in two disconnected windows — hero/mission
+// (before #vision) and services/footer (after it) — since it's hidden for the whole
+// 400vh #vision scrub in between (see visionFieldState). Those two windows have wildly
+// different raw scroll-pixel lengths (hero/mission is long, services/footer is short),
+// so a straight scrollY-proportion mapping starves the short window of camera travel and
+// leaves it stranded past BOUNDS, past where any object was ever spawned. Instead each
+// window gets a fixed, equal half of the camera's total travel range regardless of how
+// many raw pixels it actually spans, so both windows always keep the camera within the
+// spawn radius.
 function getScrollProgress(){
+  const visionEl = document.getElementById('vision');
+  const visionTop = visionEl.offsetTop;
+  const visionSpan = visionEl.offsetHeight;
   const h = document.documentElement.scrollHeight - window.innerHeight;
-  return h > 0 ? window.scrollY / h : 0;
+  if(h <= 0 || visionTop <= 0) return 0;
+  if(window.scrollY <= visionTop){
+    return (window.scrollY / visionTop) * 0.5;
+  }
+  if(window.scrollY <= visionTop + visionSpan){
+    return 0.5; // frozen during the scrub — field is hidden anyway
+  }
+  const postVisionMax = Math.max(h - visionTop - visionSpan, 1);
+  const post = (window.scrollY - visionTop - visionSpan) / postVisionMax;
+  return 0.5 + Math.min(Math.max(post, 0), 1) * 0.5;
 }
 
 /* ================= impact splats — spawned BEHIND the canvas layer ================= */
@@ -854,6 +952,7 @@ const MAX_THROW_SPEED = 14;
 function toNDC(e){ ndc.x = (e.clientX/window.innerWidth)*2-1; ndc.y = -(e.clientY/window.innerHeight)*2+1; }
 
 window.addEventListener('mousedown', (e)=>{
+  if(visionFieldState.hidden) return; // field is hidden behind the #vision scrub — not grabbable
   toNDC(e);
   raycaster.setFromCamera(ndc, camera);
   const hit = raycaster.intersectObjects(nodes)[0];
