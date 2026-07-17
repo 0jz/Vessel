@@ -191,8 +191,16 @@
   .word{display:inline-block;will-change:transform;}
 
   footer{padding:100px 28px 40px;border-top:1px solid var(--line);background:rgba(10,10,10,.75);}
-  .footer-top{display:flex;flex-wrap:wrap;justify-content:space-between;gap:40px;margin-bottom:80px;}
-  .footer-title{font-size:clamp(32px,6vw,64px);max-width:600px;}
+  .footer-top{display:flex;flex-wrap:wrap;justify-content:center;text-align:center;gap:40px;margin-bottom:80px;}
+  .footer-title{font-size:clamp(32px,6vw,64px);max-width:600px;position:relative;z-index:1;}
+  /* hover-reveal panel behind the heading: a flat (no curvature/fold), unanimated pixel-dot
+     grid plus a few small spinning accent-color shapes, clipped to a circle that tracks the
+     cursor and grows from 0 on hover — independent of both the hero's WebGL grid and the
+     flying-object field ("those two screens are not connected"), see the dedicated IIFE in
+     the script below. Sized well past the text's own box so the circle has room to grow. */
+  .footer-title-wrap{position:relative;display:inline-block;}
+  .footer-reveal-canvas{position:absolute;inset:-180px;z-index:0;pointer-events:none;clip-path:circle(0px at 50% 50%);}
+  #cursorRing.reveal-active{width:280px;height:280px;border-color:rgba(212,255,61,.55);}
   .footer-cols{display:flex;gap:60px;flex-wrap:wrap;}
   .footer-col h4{font-size:11px;color:var(--muted);margin-bottom:14px;}
   .footer-col a{display:inline-block;font-size:14px;margin-bottom:10px;opacity:.85;will-change:transform;}
@@ -317,7 +325,10 @@
 
 <footer id="contact">
   <div class="footer-top">
-    <div class="footer-title display">Let's build<br>something worth<br>stepping into.</div>
+    <div class="footer-title-wrap">
+      <canvas class="footer-reveal-canvas"></canvas>
+      <div class="footer-title display">Let's build<br>something worth<br>stepping into.</div>
+    </div>
   </div>
   <div class="footer-cols">
     <div class="footer-col">
@@ -1249,6 +1260,120 @@ gsap.from('.footer-bottom', {
   opacity:0, y:16, duration:0.7, ease:'power3.out',
   scrollTrigger:{ trigger: '.footer-bottom', start:'top 95%' }
 });
+
+/* ================= footer "Let's build" hover reveal =================
+   A small, self-contained 2D canvas panel behind the heading, clipped to a circle that
+   tracks the cursor and grows from 0 on hover. Deliberately NOT a reuse of the hero's WebGL
+   background grid or the flying-object field ("those two screens are not connected") — flat
+   (no bend/fold), no ripple pulse, no ambient color grading: just a static pixel-dot grid and
+   a few small wireframe shapes spinning in place in the site's accent color. The reveal
+   circle is framed by the same hollow cursor ring used everywhere else, just grown much
+   larger specifically for this target via the .reveal-active class below. Hover-only —
+   there's no touch equivalent, same reasoning as the hero drag hint fix above. */
+if(!isTouch){
+  const revealWrap = document.querySelector('.footer-title-wrap');
+  const revealCanvas = document.querySelector('.footer-reveal-canvas');
+  const revealRing = document.getElementById('cursorRing');
+  if(revealWrap && revealCanvas && revealRing){
+    const rctx = revealCanvas.getContext('2d');
+    let revealHovering = false, revealRaf = null;
+    let revealX = 0, revealY = 0;
+    const revealRadius = {r: 0};
+
+    function resizeRevealCanvas(){
+      const dpr = Math.min(window.devicePixelRatio, 2);
+      revealCanvas.width = revealCanvas.clientWidth * dpr;
+      revealCanvas.height = revealCanvas.clientHeight * dpr;
+    }
+    resizeRevealCanvas();
+    window.addEventListener('resize', resizeRevealCanvas);
+
+    const revealShapes = [
+      {x:0.30, y:0.36, size:15, speed: 0.6},
+      {x:0.63, y:0.30, size:10, speed:-0.9},
+      {x:0.50, y:0.62, size:19, speed: 0.45},
+      {x:0.74, y:0.58, size: 9, speed:-1.15},
+    ].map(s => ({...s, angle: Math.random() * Math.PI * 2}));
+
+    function drawRevealGrid(dpr){
+      const spacing = 22 * dpr, dot = 2 * dpr;
+      rctx.fillStyle = 'rgba(242,242,237,0.16)';
+      for(let y = spacing/2; y < revealCanvas.height; y += spacing){
+        for(let x = spacing/2; x < revealCanvas.width; x += spacing){
+          rctx.fillRect(x - dot/2, y - dot/2, dot, dot);
+        }
+      }
+    }
+
+    function drawRevealShape(shape, dpr){
+      const cx = shape.x * revealCanvas.width, cy = shape.y * revealCanvas.height, s = shape.size * dpr;
+      rctx.save();
+      rctx.translate(cx, cy);
+      rctx.rotate(shape.angle);
+      rctx.strokeStyle = '#d4ff3d';
+      rctx.lineWidth = 1.5 * dpr;
+      rctx.beginPath();
+      for(let i = 0; i < 6; i++){
+        const a = (i / 6) * Math.PI * 2;
+        const px = Math.cos(a) * s, py = Math.sin(a) * s * 0.85;
+        if(i === 0) rctx.moveTo(px, py); else rctx.lineTo(px, py);
+      }
+      rctx.closePath();
+      rctx.stroke();
+      rctx.beginPath();
+      rctx.moveTo(-s, 0); rctx.lineTo(s, 0);
+      rctx.moveTo(0, -s*0.85); rctx.lineTo(0, s*0.85);
+      rctx.stroke();
+      rctx.restore();
+    }
+
+    // BUG (fixed): converting client coords to canvas-local coords only on mouse events (using
+    // getBoundingClientRect() at that instant) goes stale the moment the page reflows after —
+    // footer content below is still staggering/settling in on scroll, which shifts this very
+    // wrap's position slightly. Re-deriving canvas-local position from the raw client coords
+    // fresh every rendered frame (not just on mouse events) keeps the circle glued to the
+    // actual cursor regardless of any layout shift in between.
+    let lastClientX = 0, lastClientY = 0;
+
+    function updateRevealClip(){
+      const rect = revealCanvas.getBoundingClientRect();
+      revealX = lastClientX - rect.left;
+      revealY = lastClientY - rect.top;
+      revealCanvas.style.clipPath = `circle(${revealRadius.r}px at ${revealX}px ${revealY}px)`;
+    }
+    function setRevealPos(clientX, clientY){
+      lastClientX = clientX;
+      lastClientY = clientY;
+      updateRevealClip();
+    }
+
+    function renderReveal(){
+      const dpr = Math.min(window.devicePixelRatio, 2);
+      updateRevealClip();
+      rctx.clearRect(0, 0, revealCanvas.width, revealCanvas.height);
+      drawRevealGrid(dpr);
+      revealShapes.forEach(shape => {
+        shape.angle += 0.012 * shape.speed;
+        drawRevealShape(shape, dpr);
+      });
+      revealRaf = (revealHovering || revealRadius.r > 0.5) ? requestAnimationFrame(renderReveal) : null;
+    }
+
+    revealWrap.addEventListener('mouseenter', (e)=>{
+      revealHovering = true;
+      setRevealPos(e.clientX, e.clientY);
+      revealRing.classList.add('reveal-active');
+      gsap.to(revealRadius, {r:170, duration:0.6, ease:'power3.out', onUpdate:updateRevealClip});
+      if(!revealRaf) renderReveal();
+    });
+    revealWrap.addEventListener('mousemove', (e)=> setRevealPos(e.clientX, e.clientY));
+    revealWrap.addEventListener('mouseleave', ()=>{
+      revealHovering = false;
+      revealRing.classList.remove('reveal-active');
+      gsap.to(revealRadius, {r:0, duration:0.45, ease:'power2.in', onUpdate:updateRevealClip});
+    });
+  }
+}
 
 if(!isTouch){
   document.body.classList.add('has-cursor');
