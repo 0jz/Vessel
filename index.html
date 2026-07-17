@@ -768,7 +768,7 @@ const geo = new THREE.IcosahedronGeometry(1, 0);
 const PALETTE = [0xd4ff3d, 0x7cf2c4, 0xff9d6c, 0x9d8cff];
 
 // unselected state: dim, double-sided so the far/inner faces read through — the "other side"
-const dimMaterial = new THREE.MeshBasicMaterial({color:0xf2f2ed, wireframe:true, transparent:true, opacity:.14, side:THREE.DoubleSide});
+const dimMaterial = new THREE.MeshBasicMaterial({color:0xf2f2ed, wireframe:true, transparent:true, opacity:.24, side:THREE.DoubleSide});
 // selected/grabbed state: fully lit outline in the object's own color
 const brightMaterials = {};
 PALETTE.forEach(c => brightMaterials[c] = new THREE.MeshBasicMaterial({color:c, wireframe:true, transparent:true, opacity:1, side:THREE.DoubleSide}));
@@ -776,24 +776,13 @@ PALETTE.forEach(c => brightMaterials[c] = new THREE.MeshBasicMaterial({color:c, 
 /* --- play area walls: objects bounce inside this box --- */
 const BOUNDS = {x:9, y:23, z:6.5};
 
-// Where the hero's WebGL grid background actually fades to black: the same #vision
-// ScrollTrigger that drives that fade ('top bottom' -> 'top center') is re-measured here in
-// absolute scroll pixels, then converted through the same scroll-progress -> world-y mapping
-// the camera itself uses (see camera.position.y in animate() below) — so this is the *real*
-// fade point for this page's actual content height, not a guessed fraction that would drift
-// out of sync if a section above #vision changes size.
-function computeVisionFadeY(){
-  const visionEl = document.getElementById('vision');
-  const scrollable = document.documentElement.scrollHeight - window.innerHeight;
-  if(!visionEl || scrollable <= 0) return 0;
-  const visionAbsTop = visionEl.getBoundingClientRect().top + window.scrollY;
-  const fadeStartScroll = visionAbsTop - window.innerHeight;   // ScrollTrigger start: 'top bottom'
-  const fadeDoneScroll = visionAbsTop - window.innerHeight/2;  // ScrollTrigger end: 'top center' — fully black
-  const progress = THREE.MathUtils.clamp((fadeStartScroll + fadeDoneScroll) / 2 / scrollable, 0, 1);
-  return -progress * (BOUNDS.y*1.9) + BOUNDS.y*0.4;
-}
-const SPAWN_CENTER_Y = THREE.MathUtils.clamp(computeVisionFadeY(), -BOUNDS.y*0.85, BOUNDS.y*0.85);
-const SPAWN_SPREAD_Y = 6; // tight cluster around the fade point rather than spread across the whole play area
+// BUG (fixed): objects used to spawn in a tight cluster around the #vision fade point only.
+// At scroll=0 the camera sits at y = BOUNDS.y*0.4 (~9.2) — nowhere near that cluster — so
+// every shape was off-screen in the hero, exactly where the copy says "drag the shapes /
+// throw them at the walls". Spawning across the full play-area height instead means shapes
+// are always near the camera, at any scroll position, hero included.
+const SPAWN_CENTER_Y = 0;
+const SPAWN_SPREAD_Y = BOUNDS.y * 1.8;
 
 const nodes = [];
 const COUNT = 58;
@@ -860,6 +849,7 @@ function spawnSplat(worldPos, colorHex){
 const raycaster = new THREE.Raycaster();
 const ndc = new THREE.Vector2();
 let dragNode = null, dragDistance = 0, lastDragPos = new THREE.Vector3(), lastDragT = 0;
+const MAX_THROW_SPEED = 14;
 
 function toNDC(e){ ndc.x = (e.clientX/window.innerWidth)*2-1; ndc.y = -(e.clientY/window.innerHeight)*2+1; }
 
@@ -882,8 +872,12 @@ window.addEventListener('mousemove', (e)=>{
   raycaster.setFromCamera(ndc, camera);
   const newPos = raycaster.ray.origin.clone().addScaledVector(raycaster.ray.direction, dragDistance);
   const now = performance.now();
-  const dt = Math.max((now - lastDragT)/1000, 0.001);
+  // floor dt at a real frame interval (not 0.001s) — two mousemove events can fire
+  // within <1ms of each other, and dividing by that near-zero dt was launching the
+  // thrown object at absurd, physically-nonsense speed
+  const dt = Math.max((now - lastDragT)/1000, 1/120);
   dragNode.velocity.copy(newPos).sub(lastDragPos).divideScalar(dt).multiplyScalar(0.6);
+  dragNode.velocity.clampLength(0, MAX_THROW_SPEED);
   dragNode.position.copy(newPos);
   lastDragPos.copy(newPos);
   lastDragT = now;
@@ -928,6 +922,37 @@ function stepPhysics(dt){
     }
   }
 
+  // object-object collision — they were previously solid only against the walls and
+  // passed straight through each other, which read as broken once enough of them were
+  // actually visible on screen at once
+  const delta = new THREE.Vector3();
+  for(let i=0;i<nodes.length;i++){
+    const a = nodes[i];
+    if(a.userData.dragging) continue;
+    for(let j=i+1;j<nodes.length;j++){
+      const b = nodes[j];
+      if(b.userData.dragging) continue;
+      delta.subVectors(b.position, a.position);
+      const dist = delta.length();
+      const minDist = (a.userData.radius + b.userData.radius) * 0.85; // wireframe reads smaller than true bounds
+      if(dist > 0 && dist < minDist){
+        const normal = delta.multiplyScalar(1/dist);
+        // separate so they don't keep re-colliding every frame while overlapping
+        const overlap = (minDist - dist) * 0.5;
+        a.position.addScaledVector(normal, -overlap);
+        b.position.addScaledVector(normal, overlap);
+        // equal-mass elastic exchange along the collision normal
+        const rel = a.velocity.dot(normal) - b.velocity.dot(normal);
+        if(rel > 0){
+          const impulse = rel * RESTITUTION;
+          a.velocity.addScaledVector(normal, -impulse);
+          b.velocity.addScaledVector(normal, impulse);
+          hits.push(a);
+        }
+      }
+    }
+  }
+
   if(hits.length){
     // prioritise closer objects — only the nearest few actually flash the wall
     const unique = [...new Set(hits)].sort((a,b)=> camera.position.distanceTo(a.position) - camera.position.distanceTo(b.position));
@@ -953,7 +978,6 @@ function animate(){
   requestAnimationFrame(animate);
 }
 animate();
-
 window.addEventListener('resize', ()=>{
   camera.aspect = window.innerWidth/window.innerHeight;
   camera.updateProjectionMatrix();
@@ -1028,8 +1052,13 @@ if(!isTouch){
 
   document.querySelectorAll('.work-item').forEach(item=>{
     item.addEventListener('mousemove', (e)=>{ pX(e.clientX); pY(e.clientY); });
-    item.addEventListener('mouseenter', ()=>{
+    item.addEventListener('mouseenter', (e)=>{
       activePreviewItem = item;
+      // position must snap to the cursor immediately on entry, not wait for the next
+      // 'mousemove' — jumping straight from one item to the next (a fast scan down the
+      // list) previously left the preview box rendering the new item's label/color at
+      // the *previous* item's stale position for a frame, reading as a stuck ghost box
+      pX(e.clientX); pY(e.clientY);
       const color = item.dataset.previewColor || '#d4ff3d';
       preview.style.background = `linear-gradient(160deg, ${color}55, #0a0a0a)`;
       previewLabel.textContent = item.dataset.previewLabel || '';
