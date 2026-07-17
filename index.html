@@ -130,9 +130,26 @@
     position:sticky;top:0;height:100svh;width:100%;overflow:hidden;
     display:flex;align-items:center;justify-content:center;text-align:center;
   }
-  #visionCanvas{position:absolute;inset:0;width:100%;height:100%;opacity:.55;
-    -webkit-mask-image:radial-gradient(ellipse at center, #000 55%, transparent 85%);
-    mask-image:radial-gradient(ellipse at center, #000 55%, transparent 85%);}
+  /* the video window sits inset from the viewport edges with a visible glass "bezel" ring
+     between .vision-frame-glass (the blurred/distorted ring, via the same liquidGlass SVG
+     filter as .glass-panel) and .vision-frame (the crisp, un-blurred video window itself,
+     inset slightly further in so the ring is actually visible around it). */
+  .vision-frame-glass{
+    position:absolute;inset:4% 6%;border-radius:28px;
+    background:rgba(255,255,255,.03);
+    border:1px solid rgba(255,255,255,.14);
+    backdrop-filter:blur(20px) saturate(140%) url(#liquidGlass);
+    -webkit-backdrop-filter:blur(20px) saturate(140%);
+    box-shadow:0 20px 60px rgba(0,0,0,.45);
+  }
+  .vision-frame{
+    position:absolute;inset:5.4% 7.4%;border-radius:20px;overflow:hidden;
+    border:1px solid rgba(255,255,255,.18);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.14), inset 0 0 40px rgba(0,0,0,.35);
+  }
+  #visionCanvas{position:absolute;inset:0;width:100%;height:100%;
+    -webkit-mask-image:radial-gradient(ellipse at center, #000 60%, transparent 100%);
+    mask-image:radial-gradient(ellipse at center, #000 60%, transparent 100%);}
   .glass-panel{
     position:relative;max-width:900px;padding:56px 64px;border-radius:28px;
     border:1px solid rgba(255,255,255,.16);
@@ -256,8 +273,9 @@
 
 <section id="vision">
   <div class="vision-pin">
-    <canvas id="visionCanvas"></canvas>
-    <div class="glass-panel" data-reveal>
+    <div class="vision-frame-glass"></div>
+    <div class="vision-frame"><canvas id="visionCanvas"></canvas></div>
+    <div class="glass-panel">
       <p class="big-line display">Immersive worlds, built to be<br><em>felt</em> — not just seen.</p>
     </div>
   </div>
@@ -379,6 +397,15 @@ const visionFieldState = {hidden: false};
     .to('#glWrap', {opacity:0, duration:0.05})
     .to('#glWrap', {opacity:0, duration:0.9})
     .to('#glWrap', {opacity:1, duration:0.05});
+
+  // the copy panel shows only at the start of the scrub, then gets out of the way so the
+  // frame sequence reads as the thing you're actually scrolling through — visible for the
+  // first ~20% of the scrub, gone by ~32%, hidden for the rest.
+  gsap.timeline({scrollTrigger:{trigger:'#vision', start:'top top', end:'bottom bottom', scrub:true}})
+    .fromTo('.glass-panel', {opacity:0, y:24}, {opacity:1, y:0, duration:0.08, ease:'power2.out'})
+    .to('.glass-panel', {opacity:1, duration:0.12})
+    .to('.glass-panel', {opacity:0, y:-16, duration:0.12, ease:'power2.in'})
+    .to('.glass-panel', {opacity:0, duration:0.68});
 })();
 
 /* ================= WEBGL background grid — real bent plane, alche-style =================
@@ -640,6 +667,16 @@ const visionFieldState = {hidden: false};
       fillColor = mix(fillColor, warmAccent, smoothstep(0.45, 1.0, mask));
       float fillAlpha = mix(0.14, 0.62, mask); // more presence than before (was 0.12-0.5) — "add more of the coloring"
 
+      // vibrant pulse boost: a stronger, more saturated accent riding the ripple pulse itself
+      // (not the general ambient mask), scaled by uFade — the same driver that decays the
+      // vertex shader's paper-fold amount as #vision approaches (see uFold.value in animate()
+      // below). At full fold (hero) pulses are punchy and saturated; as the fold decays toward
+      // #vision, pulseVibrancy decays with it, fading the color back to the plain gradient above.
+      vec3 pulseAccent = vec3(0.831, 1.0, 0.239); // a punchier, more saturated version of the site's own lime accent
+      float pulseVibrancy = ripple * uFade;
+      fillColor = mix(fillColor, pulseAccent, pulseVibrancy * 0.85);
+      fillAlpha = max(fillAlpha, fillAlpha + pulseVibrancy * 0.4);
+
       // Composited as layers, not summed: tile lines are exact multiples of cell lines,
       // which are exact multiples of pixel lines, so a tile line is *also* a cell line and
       // a pixel line at every point along it. Summing all three colors/alphas together made
@@ -802,10 +839,12 @@ const visionFieldState = {hidden: false};
     });
   }
 
-  // fade only — the pattern itself stays put while you scroll (like alche's background does;
-  // it's position:fixed and doesn't track scroll position at all). The only scroll-linked
-  // thing left is fading the whole layer out right as #vision arrives, handing off to
-  // "Immersive worlds..." (see notes.md for the planned video/gif there).
+  // the pattern's position stays put while you scroll (like alche's background does; it's
+  // position:fixed and doesn't track scroll position at all) — scrollFade instead drives two
+  // things that DO decay together as #vision arrives, handing off to "Immersive worlds...":
+  // the layer's own opacity, and (see animate() below) the vertex shader's paper-fold amount
+  // and the fragment shader's vibrant ripple-pulse boost, so the coloring visibly settles back
+  // to its plain, unfolded state in step with the fold itself flattening out.
   let scrollFade = 1;
   if(window.gsap && window.ScrollTrigger){
     ScrollTrigger.create({
@@ -825,6 +864,7 @@ const visionFieldState = {hidden: false};
       mesh.rotation.x = -curY * 0.025;
     }
     uniforms.uFade.value = scrollFade;
+    uniforms.uFold.value = FOLD_UNITS * scrollFade;
     uniforms.uTime.value = clock.getElapsedTime();
     renderer.render(scene, camera);
   })();
