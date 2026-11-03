@@ -12,6 +12,8 @@ A single-page landing site concept for a fictional immersive-worlds studio, buil
 
 ![Frame from the Vision section scroll sequence](assets/vision-frames/frame_60.png)
 
+![Vessel screenshot](docs/screenshot.png)
+
 ## Features
 
 - **Physics hero.** 58 wireframe icosahedra drift and bounce inside a curved play area. Click and drag to grab one and throw it; wall hits spawn color splashes.
